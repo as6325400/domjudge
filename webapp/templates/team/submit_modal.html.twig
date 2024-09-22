@@ -79,11 +79,74 @@
             {% endif %}
         </div>
     </div>
+
+    <script>
+        const fileInput = document.getElementById('submit_problem_code');
+        fileInput.addEventListener('change', (event) => {
+            const filenameRegex = {{ validFilenameRegex }};
+            const five_minutes_in_ms = 5 * 60 * 1000;
+            const now = Date.now();
+            filesSelected = $('#files_selected');
+            filesSelected.addClass('d-none');
+
+            var fileInfoHtml = '';
+            const files = event.target.files;
+            atLeastOneFileRecent = false;
+            for (let file of files) {
+                const date = new Date(file.lastModified);
+                const ago = humanReadableTimeDiff((now - date)/1000) + ' ago';
+                if(date > now - five_minutes_in_ms) {
+                    atLeastOneFileRecent = true;
+                }
+                fileValidChars = file.name.match(filenameRegex);
+                size = humanReadableBytes(file.size);
+
+                className = '';
+                message = `size ${size}`;
+                message += `, last modified ${ago}`;
+                if(!fileValidChars) {
+                    className = 'bg-danger';
+                    message += ', invalid filename';
+                }
+                if(file.size == 0) {
+                    className = 'bg-warning';
+                    message += ', empty file';
+                }
+                fileInfoHtml += `<li class="${className}"><span class="filename">${file.name}</span> ${message}</li>`;
+            }
+            result = '<ul>' + fileInfoHtml + '</ul>';
+            if(!atLeastOneFileRecent) {
+                result += '<div class="alert alert-warning">None of the selected files have been recently modified</div>';
+            }
+            filesSelected.html(result);
+            filesSelected.removeClass('d-none');
+        });
+    </script>
     <style>
         .container {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
             gap: 10px; 
+        }
+        
+        .text-center {
+            text-align: center;
+        }
+        
+        .editor-container {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            padding: 10px;
+            margin-top: 10px;
+            margin-bottom: 10px;
+            background-color: #fafafa;
+            max-height: 400px;
+            overflow: auto;
+        }
+        
+        .editor-container:hover {
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
         }
     </style>
 </div>

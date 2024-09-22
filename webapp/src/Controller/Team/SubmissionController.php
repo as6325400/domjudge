@@ -68,7 +68,6 @@ class SubmissionController extends BaseController
 
         $formUpload->handleRequest($request);
         $formPaste->handleRequest($request);
-
         if ($formUpload->isSubmitted() && $formUpload->isValid()) {
             if ($contest === null) {
                 $this->addFlash('danger', 'No active contest');
@@ -80,7 +79,7 @@ class SubmissionController extends BaseController
                 /** @var Language $language */
                 $language = $formUpload->get('language')->getData();
                 /** @var UploadedFile[] $files */
-                $files = $formUpload->get('code')->getData();
+                $files      = $formUpload->get('code')->getData();
                 if (!is_array($files)) {
                     $files = [$files];
                 }
@@ -116,8 +115,7 @@ class SubmissionController extends BaseController
                 $this->addFlash('danger', 'No active contest');
             } elseif (!$this->dj->checkrole('jury') && !$contest->getFreezeData()->started()) {
                 $this->addFlash('danger', 'Contest has not yet started');
-            } 
-            else {
+            } else {
                 $problem = $formPaste->get('problem')->getData();
                 $language = $formPaste->get('language')->getData();
                 $codeContent = $formPaste->get('code_content')->getData();
@@ -146,7 +144,7 @@ class SubmissionController extends BaseController
                 );
 
                 $files = [$uploadedFile];
-                $entryPoint = $formPaste->get('entry_point')->getData() ?: null;
+                $entryPoint = $tempFileName;
                 $submission = $this->submissionService->submitSolution(
                     $team,
                     $this->dj->getUser(),
