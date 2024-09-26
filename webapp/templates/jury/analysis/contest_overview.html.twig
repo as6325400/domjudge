@@ -344,22 +344,35 @@ nv.addGraph(function() {
 // x-axis is contest time
 // y axis is # of submissions
 
+{% set max_submissions_per_minute = 0 %}
+
 var submission_stats = [
   {% for result in ['correct', 'wrong-answer', 'timelimit', 'run-error', 'compiler-error', 'no-output'] %}
   {
     key: "{{result}}",
     color: "{{colors[result]}}",
     values: [
-      {# TODO: make sure these are actually ordered by submittime #}
-      {# TODO: also make sure these submissions are in the same contest #}
       [0,0],
-      {% set count = 0 %}
-      {% for submission in submissions | filter(submission => submission.result) %}
-        {% if submission.result == result %}{% set count = count +1 %}{% endif %}
-        [ {{ (submission.submittime - current_contest.starttime)/60.0 }},
-          {{ count }}
-        ],
+      {% set current_minute = 0 %}
+      {% set minute_count = 0 %}
+      {% for minute in range(0, ((current_contest.endtime - current_contest.starttime) / 60)|round ) %}
+        {% set minute_count = 0 %}
+        {% for submission in submissions | filter(submission => submission.result) %}
+          {# Calculate which minute the submission belongs to #}
+          {% if submission.result == result %}
+            {% set submission_minute = ((submission.submittime - current_contest.starttime) / 60)|round %}
+            {% if submission_minute == minute %}
+              {% set minute_count = minute_count + 1 %}
+            {% endif %}
+          {% endif %}
         {% endfor %}
+        {# The number of submissions in this minute #}
+        [{{ minute }}, {{ minute_count }}],
+
+        {% if minute_count > max_submissions_per_minute %}
+          {% set max_submissions_per_minute = minute_count %}
+        {% endif %}
+      {% endfor %}
     ]
   },
   {% endfor %}
@@ -376,7 +389,7 @@ nv.addGraph(function() {
       .showYAxis(true)        //Show the y-axis
       .showXAxis(true)        //Show the x-axis
       .forceX([0, {{ (current_contest.endtime - current_contest.starttime) / 60 }}])
-      .forceY([0, {{ submissions|length *1.10 }}])
+      .forceY([0, {{  max_submissions_per_minute *1.10 }}])
       ;
   chart.xAxis     //Chart x-axis settings
       .axisLabel('Contest Time(minutes)')
