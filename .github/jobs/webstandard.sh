@@ -92,62 +92,64 @@ if [ "$NUM_ERRORS" -ne 0 ]; then
 fi
 section_end
 
-if [ "$TEST" = "w3cval" ]; then
-    section_start "Remove files from upstream with problems"
-    rm -rf localhost/domjudge/doc
-    rm -rf localhost/domjudge/css/fontawesome-all.min.css*
-    rm -rf localhost/domjudge/bundles/nelmioapidoc*
-    rm -f localhost/domjudge/css/bootstrap.min.css*
-    rm -f localhost/domjudge/css/select2-bootstrap*.css*
-    rm -f localhost/domjudge/css/dataTables*.css*
-    rm -f localhost/domjudge/jury/config/check/phpinfo*
-    section_end
-
-    section_start "Install testsuite"
-    cd "$DIR"
-    wget https://github.com/validator/validator/releases/latest/download/vnu.linux.zip
-    unzip -q vnu.linux.zip
-    section_end
-
-    FLTR='--filterpattern .*autocomplete.*|.*style.*|.*role=tab.*|.*descendant.*|.*Stray.*|.*attribute.*|.*Forbidden.*|.*stream.*|.*obsolete.*'
-    for typ in html css svg
-    do
-        section_start "Analyse with $typ"
-	# shellcheck disable=SC2086
-        "$DIR"/vnu-runtime-image/bin/vnu --errors-only --exit-zero-always --skip-non-$typ --format json $FLTR "$URL" 2> result.json
-	# shellcheck disable=SC2086
-	NEWFOUNDERRORS=$("$DIR"/vnu-runtime-image/bin/vnu --errors-only --exit-zero-always --skip-non-$typ --format gnu $FLTR "$URL" 2>&1 | wc -l)
-        FOUNDERR=$((NEWFOUNDERRORS+FOUNDERR))
-        python3 -m "json.tool" < result.json > "$ARTIFACTS/w3c$typ$URL.json"
-        trace_off; python3 gitlab/jsontogitlab.py "$ARTIFACTS/w3c$typ$URL.json"; trace_on
+if [ "$TEST" != "none" ]; then
+    if [ "$TEST" = "w3cval" ]; then
+        section_start "Remove files from upstream with problems"
+        rm -rf localhost/domjudge/doc
+        rm -rf localhost/domjudge/css/fontawesome-all.min.css*
+        rm -rf localhost/domjudge/bundles/nelmioapidoc*
+        rm -f localhost/domjudge/css/bootstrap.min.css*
+        rm -f localhost/domjudge/css/select2-bootstrap*.css*
+        rm -f localhost/domjudge/css/dataTables*.css*
+        rm -f localhost/domjudge/jury/config/check/phpinfo*
         section_end
-    done
-else
-    section_start "Remove files from upstream with problems"
-    rm -rf localhost/domjudge/{doc,api}
-    section_end
 
-    if [ "$TEST" == "axe" ]; then
-        STAN="-e $TEST"
-        FLTR=""
+        section_start "Install testsuite"
+        cd "$DIR"
+        wget https://github.com/validator/validator/releases/latest/download/vnu.linux.zip
+        unzip -q vnu.linux.zip
+        section_end
+
+        FLTR='--filterpattern .*autocomplete.*|.*style.*|.*role=tab.*|.*descendant.*|.*Stray.*|.*attribute.*|.*Forbidden.*|.*stream.*|.*obsolete.*'
+        for typ in html css svg
+        do
+            section_start "Analyse with $typ"
+        # shellcheck disable=SC2086
+            "$DIR"/vnu-runtime-image/bin/vnu --errors-only --exit-zero-always --skip-non-$typ --format json $FLTR "$URL" 2> result.json
+        # shellcheck disable=SC2086
+        NEWFOUNDERRORS=$("$DIR"/vnu-runtime-image/bin/vnu --errors-only --exit-zero-always --skip-non-$typ --format gnu $FLTR "$URL" 2>&1 | wc -l)
+            FOUNDERR=$((NEWFOUNDERRORS+FOUNDERR))
+            python3 -m "json.tool" < result.json > "$ARTIFACTS/w3c$typ$URL.json"
+            trace_off; python3 gitlab/jsontogitlab.py "$ARTIFACTS/w3c$typ$URL.json"; trace_on
+            section_end
+        done
     else
-        STAN="-s $TEST"
-        FLTR0="-E '#DataTables_Table_0 > tbody > tr > td > a','#menuDefault > a','#filter-card > div > div > div > span > span:nth-child(1) > span > ul > li > input',.problem-badge"
-        FLTR1="'html > body > div > div > div > div > div > div > table > tbody > tr > td > a > span','html > body > div > div > div > div > div > div > form > div > div > div > label'"
-        FLTR="$FLTR0,$FLTR1"
-    fi
-    chown -R domjudge:domjudge "$DIR"
-    cd "$DIR"
-    ACCEPTEDERR=5
-    # shellcheck disable=SC2044,SC2035
-    for file in $(find $URL -name "*.html")
-    do
-        section_start "$file"
-        su domjudge -c "/home/domjudge/node_modules/.bin/pa11y --config .github/jobs/pa11y_config.json $STAN -r json -T $ACCEPTEDERR $FLTR $file" | python3 -m json.tool
-	ERR=$(su domjudge -c "/home/domjudge/node_modules/.bin/pa11y --config .github/jobs/pa11y_config.json $STAN -r csv -T $ACCEPTEDERR $FLTR $file" | wc -l)
-        FOUNDERR=$((ERR+FOUNDERR-1)) # Remove header row
+        section_start "Remove files from upstream with problems"
+        rm -rf localhost/domjudge/{doc,api}
         section_end
-    done
+
+        if [ "$TEST" == "axe" ]; then
+            STAN="-e $TEST"
+            FLTR=""
+        else
+            STAN="-s $TEST"
+            FLTR0="-E '#DataTables_Table_0 > tbody > tr > td > a','#menuDefault > a','#filter-card > div > div > div > span > span:nth-child(1) > span > ul > li > input',.problem-badge"
+            FLTR1="'html > body > div > div > div > div > div > div > table > tbody > tr > td > a > span','html > body > div > div > div > div > div > div > form > div > div > div > label'"
+            FLTR="$FLTR0,$FLTR1"
+        fi
+        chown -R domjudge:domjudge "$DIR"
+        cd "$DIR"
+        ACCEPTEDERR=5
+        # shellcheck disable=SC2044,SC2035
+        for file in $(find $URL -name "*.html")
+        do
+            section_start "$file"
+            su domjudge -c "/home/domjudge/node_modules/.bin/pa11y --config .github/jobs/pa11y_config.json $STAN -r json -T $ACCEPTEDERR $FLTR $file" | python3 -m json.tool
+        ERR=$(su domjudge -c "/home/domjudge/node_modules/.bin/pa11y --config .github/jobs/pa11y_config.json $STAN -r csv -T $ACCEPTEDERR $FLTR $file" | wc -l)
+            FOUNDERR=$((ERR+FOUNDERR-1)) # Remove header row
+            section_end
+        done
+    fi
 fi
 
 echo "Found: " $FOUNDERR
