@@ -120,6 +120,10 @@ class User extends BaseApiEntity implements
     #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
     private bool $enabled = true;
 
+    #[ORM\Column(options: ['comment' => 'Whether the user can change their password', 'default' => 0])]
+    #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
+    private bool $canChangePassword = false;
+
     #[ORM\ManyToOne(inversedBy: 'users')]
     #[ORM\JoinColumn(name: 'teamid', referencedColumnName: 'teamid', onDelete: 'SET NULL')]
     #[Serializer\Exclude]
@@ -513,5 +517,15 @@ class User extends BaseApiEntity implements
     public function getCalculatedExternalId(): string
     {
         return $this->getUsername();
+    }
+    
+    public function getCanChangePassword(): bool
+    {
+        return $this->canChangePassword;
+    }
+    public function setCanChangePassword(bool $canChangePassword): self
+    {
+        $this->canChangePassword = $canChangePassword;
+        return $this;
     }
 }

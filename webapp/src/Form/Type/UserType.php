@@ -70,6 +70,13 @@ class UserType extends AbstractExternalIdEntityType
                 'No' => false,
             ],
         ]);
+        $builder->add('canChangePassword', ChoiceType::class, [
+            'expanded' => true,
+            'choices' => [
+                'Yes' => true,
+                'No' => false,
+            ],
+        ]);
         $builder->add('team', ChoiceType::class, [
             'choice_label' => 'effective_name',
             'required' => false,

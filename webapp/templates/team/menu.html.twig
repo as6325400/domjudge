@@ -86,6 +86,7 @@
         </div>
 
         {% include 'partials/menu_login_logout_button.html.twig' with {confirmLogout: true} %}
+        {% include 'partials/menu_change_password_button.html.twig' with {confirmLogout: true} %}
 
         <ul class="navbar-nav">
             {% if current_team_contests | length > 1 %}
