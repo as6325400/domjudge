@@ -1191,7 +1191,7 @@ class Contest extends BaseApiEntity implements
                     $showButton = $hasstarted && !$hasended && (empty($this->getFreezetime()) || $hasfrozen);
                     break;
                 case 'deactivate':
-                    $showButton = $hasended && (empty($this->getUnfreezetime()) || $hasunfrozen);
+                    $showButton = $hasended && (empty($this->getUnfreezetime()) || $hasunfrozen) && empty($this->getDeactivatetime());
                     break;
                 case 'freeze':
                     $showButton = $hasstarted && !$hasended && !$hasfrozen;
