@@ -197,13 +197,19 @@ EOF;
                 $optionIsNew = true;
                 $options[$specName] = $optionToSet;
             }
+            $this->logger->info("=== entering config saveChanges ===");
             if (!array_key_exists($specName, $dataToSet)) {
+                $this->logger->info("[debug] specName: $specName, type: {$spec->type}");
                 if ($spec->type == 'bool' && $treatMissingBooleansAsFalse) {
                     // Special-case bool, since checkboxes don't return a
                     // value when unset.
                     $val = false;
                 } elseif ($spec->type == 'array_val' && isset($spec->options)) {
                     // Special-case array_val with options, since multiselects
+                    // don't return a value when unset.
+                    $val = [];
+                } elseif ($spec->type == 'array_keyval' && isset($spec->options)) {
+                    // Special-case array_keyval with options, since multiselects
                     // don't return a value when unset.
                     $val = [];
                 } else {
