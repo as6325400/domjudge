@@ -8,6 +8,7 @@ use App\Service\ConfigurationService;
 use App\Service\DOMJudgeService;
 use App\Service\EventLogService;
 use App\Service\ScoreboardService;
+use App\Service\VirtualContestService;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\ExpressionLanguage\Expression;
 use Symfony\Component\HttpFoundation\Request;
@@ -29,6 +30,7 @@ class ScoreboardController extends BaseController
         DOMJudgeService $dj,
         protected readonly ConfigurationService $config,
         protected readonly ScoreboardService $scoreboardService,
+        protected readonly VirtualContestService $virtualContestService,
         EntityManagerInterface $em,
         protected readonly EventLogService $eventLogService,
         KernelInterface $kernel,
@@ -44,13 +46,22 @@ class ScoreboardController extends BaseController
         }
 
         $user       = $this->dj->getUser();
+        $team       = $user->getTeam();
         $response   = new Response();
-        $contest    = $this->dj->getCurrentContest($user->getTeam()->getTeamid());
-        $refreshUrl = $this->generateUrl('team_scoreboard');
-        $data       = $this->scoreboardService->getScoreboardTwigData(
-            $request, $response, $refreshUrl, false, false, false, $contest
+        $contest    = $this->dj->getCurrentContest($team->getTeamid());
+        $refreshUrl = $this->generateUrl('team_scoreboard', $request->query->all());
+
+        // Detect active virtual participation for ghost replay filtering.
+        $viewerVp = null;
+        if ($contest && $contest->getAllowVirtual()) {
+            $viewerVp = $this->virtualContestService->getActiveVirtualParticipation($contest, $team);
+        }
+
+        $data = $this->scoreboardService->getScoreboardTwigData(
+            $request, $response, $refreshUrl, false, false, false, $contest,
+            scoreboard: null, forceUnfrozen: false, viewerVp: $viewerVp
         );
-        $data['myTeamId'] = $user->getTeam()->getTeamid();
+        $data['myTeamId'] = $team->getTeamid();
 
         if ($request->isXmlHttpRequest()) {
             $data['current_contest'] = $contest;

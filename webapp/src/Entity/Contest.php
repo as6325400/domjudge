@@ -325,6 +325,12 @@ class Contest extends BaseApiEntity implements
     #[Serializer\Exclude]
     private bool $isLocked = false;
 
+    #[ORM\Column(
+        options: ['comment' => 'Allow virtual participation for this contest?', 'default' => 0]
+    )]
+    #[Serializer\Exclude]
+    private bool $allowVirtual = false;
+
     #[Assert\File]
     #[Serializer\Exclude]
     private ?UploadedFile $contestProblemsetFile = null;
@@ -383,6 +389,13 @@ class Contest extends BaseApiEntity implements
     #[ORM\OneToMany(mappedBy: 'contest', targetEntity: Submission::class)]
     #[Serializer\Exclude]
     private Collection $submissions;
+
+    /**
+     * @var Collection<int, VirtualParticipation>
+     */
+    #[ORM\OneToMany(mappedBy: 'contest', targetEntity: VirtualParticipation::class)]
+    #[Serializer\Exclude]
+    private Collection $virtualParticipations;
 
     /**
      * @var Collection<int, ContestProblem>
@@ -463,6 +476,7 @@ class Contest extends BaseApiEntity implements
         $this->medal_categories         = new ArrayCollection();
         $this->externalContestSources   = new ArrayCollection();
         $this->contestProblemsetContent = new ArrayCollection();
+        $this->virtualParticipations    = new ArrayCollection();
     }
 
     public function getCid(): ?int
@@ -904,6 +918,33 @@ class Contest extends BaseApiEntity implements
     {
         $this->isLocked = $isLocked;
         return $this;
+    }
+
+    public function getAllowVirtual(): bool
+    {
+        return $this->allowVirtual;
+    }
+
+    public function setAllowVirtual(bool $allowVirtual): Contest
+    {
+        $this->allowVirtual = $allowVirtual;
+        return $this;
+    }
+
+    /**
+     * Get the duration of this contest in seconds.
+     */
+    public function getDurationInSeconds(): float
+    {
+        return (float)$this->getEndtime() - (float)$this->getStarttime();
+    }
+
+    /**
+     * @return Collection<int, VirtualParticipation>
+     */
+    public function getVirtualParticipations(): Collection
+    {
+        return $this->virtualParticipations;
     }
 
     public function addTeam(Team $team): Contest

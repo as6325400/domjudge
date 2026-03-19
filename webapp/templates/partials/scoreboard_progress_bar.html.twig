@@ -1,4 +1,14 @@
-{% if contest and contest.freezeData.started and not contest.freezeData.stopped %}
+{% set vp = current_team_active_vp|default(null) %}
+{% if vp %}
+    {% set now_ts = 'now'|date('U')|number_format(0, '', '') %}
+    {% set vp_elapsed = now_ts - vp.virtualStarttime %}
+    {% set vp_duration = vp.duration %}
+    {% set percentage = min(100, max(0, vp_elapsed / vp_duration * 100)) %}
+    <div class="progress" style="margin-top:{{ margin|default(0) }}px; height: 10px;" data-progress-bar>
+        <div class="progress-bar bg-info" role="progressbar" style="width: {{ percentage }}%;"
+             aria-valuenow="{{ percentage }}" aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+{% elseif contest and contest.freezeData.started and not contest.freezeData.stopped %}
     {% set percentage = contest.freezeData.progress %}
     <div class="progress" style="margin-top:{{ margin|default(0) }}px; height: 10px;" data-progress-bar>
         <div class="progress-bar" role="progressbar" style="width: {{ percentage }}%;"

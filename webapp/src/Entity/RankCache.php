@@ -65,6 +65,14 @@ class RankCache
     #[ORM\JoinColumn(name: 'teamid', referencedColumnName: 'teamid', onDelete: 'CASCADE')]
     private Team $team;
 
+    #[ORM\Id]
+    #[ORM\Column(options: [
+        'comment' => 'Virtual participation ID (0 = live participation)',
+        'unsigned' => true,
+        'default' => 0,
+    ])]
+    private int $vpid = 0;
+
     #[ORM\Column(
         type: 'text',
         length: AbstractMySQLPlatform::LENGTH_LIMIT_TEXT,
@@ -78,6 +86,17 @@ class RankCache
         options: ['comment' => 'Opaque sort key for restricted audience.', 'default' => '']
     )]
     private string $sortKeyRestricted = '';
+
+    public function setVpid(int $vpid): RankCache
+    {
+        $this->vpid = $vpid;
+        return $this;
+    }
+
+    public function getVpid(): int
+    {
+        return $this->vpid;
+    }
 
     public function setPointsRestricted(int $pointsRestricted): RankCache
     {

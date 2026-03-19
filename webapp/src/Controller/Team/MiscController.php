@@ -12,6 +12,8 @@ use App\Service\DOMJudgeService;
 use App\Service\EventLogService;
 use App\Service\ScoreboardService;
 use App\Service\SubmissionService;
+use App\Service\VirtualContestService;
+use App\Utils\Utils;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\NonUniqueResultException;
 use Doctrine\ORM\NoResultException;
@@ -44,6 +46,7 @@ class MiscController extends BaseController
         protected readonly ScoreboardService $scoreboardService,
         protected readonly SubmissionService $submissionService,
         protected readonly EventLogService $eventLogService,
+        protected readonly VirtualContestService $virtualContestService,
         KernelInterface $kernel,
     ) {
         parent::__construct($em, $eventLogService, $dj, $kernel);
@@ -72,8 +75,14 @@ class MiscController extends BaseController
             'maxWidth' => $this->config->get('team_column_width'),
         ];
         if ($contest) {
+            // Detect active VP for the team scoreboard.
+            $activeVpForScoreboard = null;
+            if ($contest->getAllowVirtual()) {
+                $activeVpForScoreboard = $this->virtualContestService->getActiveVirtualParticipation($contest, $team);
+            }
+
             $scoreboard = $this->scoreboardService
-                ->getTeamScoreboard($contest, $teamId, false);
+                ->getTeamScoreboard($contest, $teamId, false, $activeVpForScoreboard);
             $data = array_merge(
                 $data,
                 $this->scoreboardService->getScoreboardTwigData(
@@ -86,14 +95,20 @@ class MiscController extends BaseController
             // We need to clear the entity manager, because loading the team scoreboard seems to break getting submission
             // contestproblems for the contest we get the scoreboard for.
             $this->em->clear();
+            $submissionRestriction = new SubmissionRestriction(teamId: $teamId);
             $data['submissions'] = $this->submissionService->getSubmissionList(
                 [$contest->getCid() => $contest],
-                new SubmissionRestriction(teamId: $teamId),
+                $submissionRestriction,
                 paginated: false
             )[0];
 
-            /** @var Clarification[] $clarifications */
-            $clarifications = $this->em->createQueryBuilder()
+            // Check for active virtual participation (for time-gating clarifications).
+            $activeVpForClars = null;
+            if ($contest->getAllowVirtual()) {
+                $activeVpForClars = $this->virtualContestService->getActiveVirtualParticipation($contest, $team);
+            }
+
+            $clarQb = $this->em->createQueryBuilder()
                 ->from(Clarification::class, 'c')
                 ->leftJoin('c.problem', 'p')
                 ->leftJoin('c.sender', 's')
@@ -105,31 +120,52 @@ class MiscController extends BaseController
                 ->setParameter('contest', $contest)
                 ->setParameter('team', $team)
                 ->addOrderBy('c.submittime', 'DESC')
-                ->addOrderBy('c.clarid', 'DESC')
-                ->getQuery()
-                ->getResult();
+                ->addOrderBy('c.clarid', 'DESC');
 
-            /** @var Clarification[] $clarificationRequests */
-            $clarificationRequests = $this->em->createQueryBuilder()
-                ->from(Clarification::class, 'c')
-                ->leftJoin('c.problem', 'p')
-                ->leftJoin('c.sender', 's')
-                ->leftJoin('c.recipient', 'r')
-                ->select('c', 'p')
-                ->andWhere('c.contest = :contest')
-                ->andWhere('c.sender = :team')
-                ->setParameter('contest', $contest)
-                ->setParameter('team', $team)
-                ->addOrderBy('c.submittime', 'DESC')
-                ->addOrderBy('c.clarid', 'DESC')
-                ->getQuery()
-                ->getResult();
+            // For virtual participants, only show clarifications up to their relative time.
+            if ($activeVpForClars !== null) {
+                $contestStartTime = (float)$contest->getStarttime();
+                $vpRelativeTime = $activeVpForClars->getRelativeTime(Utils::now());
+                $maxClarTime = $contestStartTime + $vpRelativeTime;
+                $clarQb->andWhere('c.submittime <= :maxClarTime')
+                    ->setParameter('maxClarTime', $maxClarTime);
+            }
+
+            /** @var Clarification[] $clarifications */
+            $clarifications = $clarQb->getQuery()->getResult();
+
+            // Virtual participants cannot send clarifications, so show empty list.
+            if ($activeVpForClars !== null) {
+                $clarificationRequests = [];
+            } else {
+                /** @var Clarification[] $clarificationRequests */
+                $clarificationRequests = $this->em->createQueryBuilder()
+                    ->from(Clarification::class, 'c')
+                    ->leftJoin('c.problem', 'p')
+                    ->leftJoin('c.sender', 's')
+                    ->leftJoin('c.recipient', 'r')
+                    ->select('c', 'p')
+                    ->andWhere('c.contest = :contest')
+                    ->andWhere('c.sender = :team')
+                    ->setParameter('contest', $contest)
+                    ->setParameter('team', $team)
+                    ->addOrderBy('c.submittime', 'DESC')
+                    ->addOrderBy('c.clarid', 'DESC')
+                    ->getQuery()
+                    ->getResult();
+            }
 
             $data['clarifications']        = $clarifications;
             $data['clarificationRequests'] = $clarificationRequests;
             $data['categories']            = $this->config->get('clar_categories');
             $data['allowDownload']         = (bool)$this->config->get('allow_team_submission_download');
             $data['showTooLateResult']     = $this->config->get('show_too_late_result');
+
+            // Virtual contest data — reuse activeVpForClars (queried after em->clear).
+            if ($contest->getAllowVirtual()) {
+                $data['canStartVirtual'] = $this->virtualContestService->canStartVirtual($contest, $team);
+                $data['activeVp']        = $activeVpForClars;
+            }
         }
 
         if ($request->isXmlHttpRequest()) {

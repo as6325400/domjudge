@@ -70,5 +70,6 @@ class SubmissionRestriction
         public ?bool $externallyVerified = null,
         public ?bool $withExternalId = null,
         public ?bool $valid = null,
+        public ?int $vpid = null,
     ) {}
 }

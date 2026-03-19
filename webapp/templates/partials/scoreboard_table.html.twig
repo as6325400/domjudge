@@ -150,11 +150,18 @@
         {% endif %}
 
         {# check whether this is us, otherwise use category colour #}
+        {% set isMyVp = current_team_active_vp is defined and current_team_active_vp and score.team.teamid < 0 and score.team.virtualParticipation is defined and score.team.virtualParticipation.vpid == current_team_active_vp.vpid %}
         {% if myTeamId is defined and myTeamId == score.team.teamid %}
+            {% set classes = classes | merge(['scorethisisme']) %}
+            {% set color = '#FFFF99' %}
+        {% elseif isMyVp %}
             {% set classes = classes | merge(['scorethisisme']) %}
             {% set color = '#FFFF99' %}
         {% else %}
             {% set color = score.team.category.color %}
+        {% endif %}
+        {% if score.team.teamid < 0 %}
+            {% set classes = classes | merge(['score-virtual']) %}
         {% endif %}
         <tr class="{{ classes | join(' ') }}" data-team-id="{{ score.team.teamid }}" data-team-external-id="{{ score.team.externalid }}" data-team-name="{{ score.team.effectiveName | escape('html_attr') }}">
             {% if enable_ranking %}
@@ -227,7 +234,11 @@
                     {% set link = '#' %}
                     {% set extra = 'data-bs-toggle="modal" data-bs-target="#team-modal-' ~ score.team.teamid ~ '"' %}
                 {% else %}
-                    {% if jury %}
+                    {% if score.team.teamid < 0 %}
+                        {% if jury %}
+                            {% set link = path('jury_team', {teamId: score.team.wrappedTeam.teamid}) %}
+                        {% endif %}
+                    {% elseif jury %}
                         {% set link = path('jury_team', {teamId: score.team.teamid}) %}
                     {% elseif public %}
                         {% set link = path('public_team', {teamId: score.team.teamid}) %}
@@ -320,7 +331,12 @@
 
                     {% set link = null %}
                     {% set extra = null %}
-                    {% if jury %}
+                    {% if score.team.teamid < 0 %}
+                        {% if jury %}
+                            {% set restrict = {problemId: problem.probid} %}
+                            {% set link = path('jury_team', {teamId: score.team.wrappedTeam.teamid, restrict: restrict}) %}
+                        {% endif %}
+                    {% elseif jury %}
                         {% set restrict = {problemId: problem.probid} %}
                         {% set link = path('jury_team', {teamId: score.team.teamid, restrict: restrict}) %}
                     {% elseif static %}
@@ -433,11 +449,18 @@
     {% endif %}
 
     {# check whether this is us, otherwise use category colour #}
+    {% set isMyVp = current_team_active_vp is defined and current_team_active_vp and score.team.teamid < 0 and score.team.virtualParticipation is defined and score.team.virtualParticipation.vpid == current_team_active_vp.vpid %}
     {% if myTeamId is defined and myTeamId == score.team.teamid %}
+        {% set classes = classes | merge(['scorethisisme']) %}
+        {% set color = '#FFFF99' %}
+    {% elseif isMyVp %}
         {% set classes = classes | merge(['scorethisisme']) %}
         {% set color = '#FFFF99' %}
     {% else %}
         {% set color = score.team.category.color %}
+    {% endif %}
+    {% if score.team.teamid < 0 %}
+        {% set classes = classes | merge(['score-virtual']) %}
     {% endif %}
     <tr
         class="{{ classes | join(' ') }}"
@@ -502,7 +525,11 @@
             {% set link = '#' %}
             {% set extra = 'data-bs-toggle="modal" data-bs-target="#team-modal-' ~ score.team.teamid ~ '"' %}
         {% else %}
-            {% if jury %}
+            {% if score.team.teamid < 0 %}
+                {% if jury %}
+                    {% set link = path('jury_team', {teamId: score.team.wrappedTeam.teamid}) %}
+                {% endif %}
+            {% elseif jury %}
                 {% set link = path('jury_team', {teamId: score.team.teamid}) %}
             {% elseif public %}
                 {% set link = path('public_team', {teamId: score.team.teamid}) %}

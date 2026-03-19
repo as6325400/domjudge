@@ -11,6 +11,7 @@
             <th scope="col">problem</th>
             <th scope="col">lang</th>
             <th scope="col">result</th>
+            <th scope="col">source</th>
             {% if contest.getRuntimeAsScoreTiebreaker() %}
                 <th scope="col">runtime</th>
             {% endif %}
@@ -21,8 +22,14 @@
         </thead>
         <tbody>
         {%- for submission in submissions %}
+            {# For virtual submissions, use VP end time; for live, use contest end time. #}
+            {% if submission.virtualParticipation is not null %}
+                {% set effectiveEndtime = submission.virtualParticipation.virtualEndtime %}
+            {% else %}
+                {% set effectiveEndtime = submission.contest.endtime %}
+            {% endif %}
             {% set link = null %}
-            {% if (submission.submittime < current_team_contest.endtime or showTooLateResult) and submission.result and submission.judgings.first is not empty and submission.judgings.first.result is not empty and (not verificationRequired or submission.judgings.first.verified) %}
+            {% if (submission.submittime < effectiveEndtime or showTooLateResult) and submission.result and submission.judgings.first is not empty and submission.judgings.first.result is not empty and (not verificationRequired or submission.judgings.first.verified) %}
                 {% set link = path('team_submission', {submitId: submission.submitid}) %}
             {% endif %}
 
@@ -51,11 +58,11 @@
                 </td>
                 <td>
                     <a data-ajax-modal data-ajax-modal-after="markSeen" {% if link %}href="{{ link }}"{% endif %}>
-                        {%- if submission.submittime >= submission.contest.endtime %}
+                        {%- if submission.submittime >= effectiveEndtime %}
                             {{ 'too-late' | printResult }}
                         {%- endif %}
-                        {%- if submission.submittime < submission.contest.endtime or showTooLateResult %}
-                            {%- if submission.submittime >= submission.contest.endtime %}
+                        {%- if submission.submittime < effectiveEndtime or showTooLateResult %}
+                            {%- if submission.submittime >= effectiveEndtime %}
                                 /
                             {% endif %}
                             {%- if submission.judgings.first is empty or submission.judgings.first.result is empty %}
@@ -67,6 +74,13 @@
                             {%- endif %}
                         {%- endif %}
                     </a>
+                </td>
+                <td>
+                    {% if submission.virtualParticipation is not null %}
+                        <span class="badge bg-info text-dark">virtual #{{ submission.virtualParticipation.virtualNumber }}</span>
+                    {% else %}
+                        <span class="badge bg-secondary">live</span>
+                    {% endif %}
                 </td>
         {% if contest.getRuntimeAsScoreTiebreaker() %}
                 <td>

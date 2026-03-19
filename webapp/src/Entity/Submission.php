@@ -180,6 +180,11 @@ class Submission extends BaseApiEntity implements
     #[Serializer\Exclude]
     private ?Submission $originalSubmission = null;
 
+    #[ORM\ManyToOne(inversedBy: 'submissions')]
+    #[ORM\JoinColumn(name: 'vpid', referencedColumnName: 'vpid', onDelete: 'SET NULL')]
+    #[Serializer\Exclude]
+    private ?VirtualParticipation $virtualParticipation = null;
+
     /**
      * @var Collection<int, Submission>
      */
@@ -495,6 +500,22 @@ class Submission extends BaseApiEntity implements
     {
         $this->originalSubmission = $originalSubmission;
         return $this;
+    }
+
+    public function setVirtualParticipation(?VirtualParticipation $virtualParticipation): Submission
+    {
+        $this->virtualParticipation = $virtualParticipation;
+        return $this;
+    }
+
+    public function getVirtualParticipation(): ?VirtualParticipation
+    {
+        return $this->virtualParticipation;
+    }
+
+    public function isVirtual(): bool
+    {
+        return $this->virtualParticipation !== null;
     }
 
     public function addResubmission(Submission $submission): Submission

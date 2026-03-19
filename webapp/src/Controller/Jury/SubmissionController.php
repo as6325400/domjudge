@@ -1093,7 +1093,7 @@ class SubmissionController extends BaseController
         $contest = $this->em->getRepository(Contest::class)->find($contestId);
         $team    = $this->em->getRepository(Team::class)->find($teamId);
         $problem = $this->em->getRepository(Problem::class)->find($problemId);
-        $scoreboardService->calculateScoreRow($contest, $team, $problem);
+        $scoreboardService->calculateScoreRow($contest, $team, $problem, true, $submission->getVirtualParticipation());
 
         return $this->redirectToLocalReferrer($this->router, $request,
             $this->generateUrl('jury_submission', ['submitId' => $submission->getSubmitid()])

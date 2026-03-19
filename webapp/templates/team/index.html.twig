@@ -58,5 +58,32 @@
             // Also preview the clarification reply
             setupPreviewClarification($('#team_clarification_message') , $('#messagepreview'), true);
         }
+
+        // Virtual contest timer.
+        (function() {
+            var timerEl = document.getElementById('virtual-timer');
+            if (!timerEl) return;
+            var contestId = timerEl.getAttribute('data-contest-id');
+            function updateVirtualTimer() {
+                fetch('{{ path("team_virtual_status", {contestId: 0}) }}'.replace('/0/', '/' + contestId + '/'))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (!data.active) {
+                            timerEl.textContent = 'Completed';
+                            return;
+                        }
+                        var remaining = Math.max(0, Math.floor(data.remaining));
+                        var h = Math.floor(remaining / 3600);
+                        var m = Math.floor((remaining % 3600) / 60);
+                        var s = remaining % 60;
+                        timerEl.textContent = 'Time remaining: ' +
+                            String(h).padStart(2, '0') + ':' +
+                            String(m).padStart(2, '0') + ':' +
+                            String(s).padStart(2, '0');
+                    });
+            }
+            updateVirtualTimer();
+            setInterval(updateVirtualTimer, 10000);
+        })();
     </script>
 {% endblock %}

@@ -22,6 +22,7 @@ use App\Service\ConfigurationService;
 use App\Service\DOMJudgeService;
 use App\Service\EventLogService;
 use App\Service\SubmissionService;
+use App\Service\VirtualContestService;
 use App\Utils\Scoreboard\ScoreboardMatrixItem;
 use App\Utils\Scoreboard\TeamScore;
 use App\Utils\Utils;
@@ -54,6 +55,7 @@ class TwigExtension extends AbstractExtension implements GlobalsInterface
         protected readonly SubmissionService $submissionService,
         protected readonly EventLogService $eventLogService,
         protected readonly AwardService $awards,
+        protected readonly VirtualContestService $virtualContestService,
         protected readonly TokenStorageInterface $tokenStorage,
         protected readonly AuthorizationCheckerInterface $authorizationChecker,
         protected readonly RouterInterface $router,
@@ -149,8 +151,11 @@ class TwigExtension extends AbstractExtension implements GlobalsInterface
             'refresh_flag'                  => $refresh_flag,
             'icat_url'                      => $this->config->get('icat_url'),
             'external_ccs_submission_url'   => $this->config->get('external_ccs_submission_url'),
-            'current_team_contest'          => $team ? $this->dj->getCurrentContest($team->getTeamid()) : null,
+            'current_team_contest'          => $teamContest = ($team ? $this->dj->getCurrentContest($team->getTeamid()) : null),
             'current_team_contests'         => $team ? $this->dj->getCurrentContests($team->getTeamid()) : null,
+            'current_team_active_vp'        => ($team && $teamContest && $teamContest->getAllowVirtual())
+                                                ? $this->virtualContestService->getActiveVirtualParticipation($teamContest, $team)
+                                                : null,
             'submission_languages'          => $this->dj->getAllowedLanguagesForContest($currentContest),
             'alpha3_countries'              => Countries::getAlpha3Names(),
             'alpha3_alpha2_country_mapping' => array_combine(

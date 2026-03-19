@@ -13,6 +13,19 @@
         {% include 'partials/scoreboard_table.html.twig' with {displayRank: displayRank, jury: false, public: false} %}
     </div>
 
+    {% if activeVp is defined and activeVp %}
+        <div class="alert alert-info mt-3" role="alert">
+            <strong>Virtual Participation #{{ activeVp.virtualNumber }}</strong> is active.
+            <span id="virtual-timer" data-contest-id="{{ contest.cid }}"></span>
+        </div>
+    {% elseif canStartVirtual is defined and canStartVirtual %}
+        <div class="mt-3">
+            <a href="{{ path('team_virtual_start', {contestId: contest.cid}) }}" class="btn btn-outline-primary btn-sm">
+                <i class="fas fa-play"></i> Start Virtual Participation
+            </a>
+        </div>
+    {% endif %}
+
     <div class="mt-4" data-flash-messages>
         {% include 'partials/messages.html.twig' %}
         {% if not contest.allowSubmit %}
@@ -41,11 +54,13 @@
                 {% include 'team/partials/clarification_list.html.twig' with {clarifications: clarificationRequests} %}
             {% endif %}
 
-            <div class="m-1">
-                <a href="{{ path('team_clarification_add') }}" class="btn btn-secondary btn-sm" data-ajax-modal data-ajax-modal-after="initModalClarificationPreviewAdd">
-                    Request clarification
-                </a>
-            </div>
+            {% if activeVp is not defined or not activeVp %}
+                <div class="m-1">
+                    <a href="{{ path('team_clarification_add') }}" class="btn btn-secondary btn-sm" data-ajax-modal data-ajax-modal-after="initModalClarificationPreviewAdd">
+                        Request clarification
+                    </a>
+                </div>
+            {% endif %}
         </div>
     </div>
 {% endif %}

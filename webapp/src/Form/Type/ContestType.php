@@ -103,6 +103,15 @@ class ContestType extends AbstractExternalIdEntityType
             ],
             'help' => 'Disable this to stop recording balloons. Usually you can just leave this enabled.',
         ]);
+        $builder->add('allowVirtual', ChoiceType::class, [
+            'expanded' => true,
+            'label' => 'Allow virtual participation',
+            'choices' => [
+                'Yes' => true,
+                'No' => false,
+            ],
+            'help' => 'When enabled, teams can start a virtual participation at any time to experience the contest as if participating live, with ghost data from earlier participants.',
+        ]);
         $builder->add('runtimeAsScoreTiebreaker', ChoiceType::class, [
             'expanded' => true,
             'choices' => [

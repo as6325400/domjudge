@@ -313,6 +313,17 @@ td.scorenc { border-color: silver; border-right: 0; }
 .scorethisisme  {
     background: #ffff99;
 }
+.score-virtual td.scoretn .forceWidth {
+    font-style: italic;
+}
+.score-virtual td.scoretn .forceWidth::after {
+    content: " \f108";
+    font-family: "Font Awesome 6 Free";
+    font-style: normal;
+    font-weight: 900;
+    font-size: 0.7em;
+    opacity: 0.5;
+}
 
 .scorelegend {
     display: inline-block;

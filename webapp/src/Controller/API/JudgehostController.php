@@ -457,7 +457,7 @@ class JudgehostController extends AbstractFOSRestController
                     $contest    = $submission->getContest();
                     $team       = $submission->getTeam();
                     $problem    = $submission->getProblem();
-                    $this->scoreboardService->calculateScoreRow($contest, $team, $problem);
+                    $this->scoreboardService->calculateScoreRow($contest, $team, $problem, true, $submission->getVirtualParticipation());
 
                     $message = sprintf("submission %d, judging %d: compiler-error",
                                        $submission->getSubmitid(), $judging->getJudgingid());
@@ -1112,7 +1112,7 @@ class JudgehostController extends AbstractFOSRestController
                 $contest    = $submission->getContest();
                 $team       = $submission->getTeam();
                 $problem    = $submission->getProblem();
-                $this->scoreboardService->calculateScoreRow($contest, $team, $problem);
+                $this->scoreboardService->calculateScoreRow($contest, $team, $problem, true, $submission->getVirtualParticipation());
 
                 // We call alert here before possible validation. Note that
                 // this means that these alert messages should be treated as

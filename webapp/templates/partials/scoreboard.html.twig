@@ -121,6 +121,15 @@
             </div>
         {% endif %}
 
+        {% if allowVirtual is defined and allowVirtual and not static %}
+            <div class="btn-group btn-group-sm m-2" role="group" aria-label="Participation type filter">
+                {% set currentParticipation = participationType | default('live') %}
+                <a href="?participation=live" class="btn btn-outline-primary{% if currentParticipation == 'live' %} active{% endif %}">Live</a>
+                <a href="?participation=virtual" class="btn btn-outline-primary{% if currentParticipation == 'virtual' %} active{% endif %}">Virtual</a>
+                <a href="?participation=all" class="btn btn-outline-primary{% if currentParticipation == 'all' %} active{% endif %}">All</a>
+            </div>
+        {% endif %}
+
         {% if not static and
             (filterValues.affiliations | length > 1 or
              filterValues.countries | length > 1 or

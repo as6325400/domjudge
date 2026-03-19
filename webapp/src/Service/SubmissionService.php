@@ -14,6 +14,7 @@ use App\Entity\SubmissionFile;
 use App\Entity\SubmissionSource;
 use App\Entity\Team;
 use App\Entity\User;
+use App\Entity\VirtualParticipation;
 use App\Utils\FreezeData;
 use App\Utils\Utils;
 use Doctrine\DBAL\Exception as DBALException;
@@ -312,6 +313,12 @@ class SubmissionService
                 ->setParameter('valid', $restrictions->valid);
         }
 
+        if (isset($restrictions->vpid)) {
+            $queryBuilder
+                ->andWhere('s.virtualParticipation = :vpid')
+                ->setParameter('vpid', $restrictions->vpid);
+        }
+
         if ($this->dj->shadowMode()) {
             // When we are shadow, also load the external results
             $queryBuilder
@@ -532,10 +539,36 @@ class SubmissionService
 
         $sourceSize = $this->config->get('sourcesize_limit');
 
-        $freezeData = new FreezeData($contest);
-        if (!$this->dj->checkrole('jury') && !$freezeData->started()) {
-            throw new AccessDeniedHttpException(
-                sprintf("The contest is closed, no submissions accepted. [c%d]", $contest->getCid()));
+        // Check for active virtual participation for this team.
+        // Always check VP regardless of jury role — a user with both jury and team
+        // roles should still have VP detected when submitting from the team page.
+        $activeVp = null;
+        if ($contest->getAllowVirtual() && $source === SubmissionSource::TEAM_PAGE) {
+            $activeVp = $this->em->getRepository(VirtualParticipation::class)->findOneBy([
+                'contest' => $contest,
+                'team' => $team,
+                'is_completed' => false,
+            ]);
+            if ($activeVp !== null && !$activeVp->isActive()) {
+                $activeVp->setIsCompleted(true);
+                $this->em->flush();
+                $activeVp = null;
+            }
+        }
+
+        if ($activeVp !== null) {
+            // Virtual participation: validate against VP time window.
+            if ($submitTime < (float)$activeVp->getVirtualStarttime() ||
+                $submitTime >= $activeVp->getVirtualEndtime()) {
+                throw new AccessDeniedHttpException(
+                    sprintf("Your virtual contest has ended, no submissions accepted. [c%d]", $contest->getCid()));
+            }
+        } else {
+            $freezeData = new FreezeData($contest);
+            if (!$this->dj->checkrole('jury') && !$freezeData->started()) {
+                throw new AccessDeniedHttpException(
+                    sprintf("The contest is closed, no submissions accepted. [c%d]", $contest->getCid()));
+            }
         }
 
         if (!$contest->getAllowSubmit()) {
@@ -701,7 +734,8 @@ class SubmissionService
             ->setEntryPoint($entryPoint)
             ->setExternalid($externalId)
             ->setImportError($importError)
-            ->setSource($source);
+            ->setSource($source)
+            ->setVirtualParticipation($activeVp);
 
         // Add expected results from source. We only do this for jury submissions
         // to prevent accidental auto-verification of team submissions.
@@ -763,7 +797,13 @@ class SubmissionService
             'contest' => $problem->getContest(),
         ]);
 
-        $this->scoreboardService->calculateScoreRow($contest, $team, $problem->getProblem());
+        // Reload the VP if needed after entity manager was cleared.
+        $reloadedVp = null;
+        if ($activeVp !== null) {
+            $reloadedVp = $this->em->getRepository(VirtualParticipation::class)->find($activeVp->getVpid());
+        }
+
+        $this->scoreboardService->calculateScoreRow($contest, $team, $problem->getProblem(), true, $reloadedVp);
 
         $this->dj->alert('submit', sprintf('submission %d: team %d, language %s, problem %d',
                                            $submission->getSubmitid(), $team->getTeamid(),
@@ -772,7 +812,15 @@ class SubmissionService
         $this->dj->auditlog('submission', $submission->getSubmitid(), 'added',
             'via ' . $source->value, null, $contest->getCid());
 
-        if (Utils::difftime((float)$contest->getEndtime(), $submitTime) <= 0) {
+        if ($activeVp !== null) {
+            // For virtual submissions, check against VP end time.
+            if ($submitTime >= $reloadedVp->getVirtualEndtime()) {
+                $this->logger->info(
+                    "The virtual contest has ended, submission stored but not processed. [c%d]",
+                    [ $contest->getCid() ]
+                );
+            }
+        } elseif (Utils::difftime((float)$contest->getEndtime(), $submitTime) <= 0) {
             $this->logger->info(
                 "The contest is closed, submission stored but not processed. [c%d]",
                 [ $contest->getCid() ]

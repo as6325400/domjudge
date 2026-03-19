@@ -10,6 +10,7 @@ use App\Entity\Rejudging;
 use App\Entity\Submission;
 use App\Entity\Team;
 use App\Entity\User;
+use App\Entity\VirtualParticipation;
 use App\Utils\Utils;
 use BadMethodCallException;
 use Doctrine\DBAL\Exception as DBALException;
@@ -379,9 +380,26 @@ class RejudgingService
                 foreach ($teams as $team) {
                     foreach ($probids as $probid) {
                         $problem = $this->em->getRepository(Problem::class)->find($probid);
+                        // Recalculate for live (vpid=0).
                         $this->scoreboardService->calculateScoreRow($contest, $team, $problem);
+                        // Also recalculate for each virtual participation of this team.
+                        $vps = $this->em->getRepository(VirtualParticipation::class)->findBy([
+                            'contest' => $contest,
+                            'team' => $team,
+                        ]);
+                        foreach ($vps as $vp) {
+                            $this->scoreboardService->calculateScoreRow($contest, $team, $problem, false, $vp);
+                        }
                     }
                     $this->scoreboardService->updateRankCache($contest, $team);
+                    // Update rank cache for each VP too.
+                    $vps = $this->em->getRepository(VirtualParticipation::class)->findBy([
+                        'contest' => $contest,
+                        'team' => $team,
+                    ]);
+                    foreach ($vps as $vp) {
+                        $this->scoreboardService->updateRankCache($contest, $team, $vp);
+                    }
                 }
             }
         }

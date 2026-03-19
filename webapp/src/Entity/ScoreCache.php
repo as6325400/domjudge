@@ -109,6 +109,14 @@ class ScoreCache
     #[ORM\JoinColumn(name: 'probid', referencedColumnName: 'probid', onDelete: 'CASCADE')]
     private Problem $problem;
 
+    #[ORM\Id]
+    #[ORM\Column(options: [
+        'comment' => 'Virtual participation ID (0 = live participation)',
+        'unsigned' => true,
+        'default' => 0,
+    ])]
+    private int $vpid = 0;
+
     public function setSubmissionsRestricted(int $submissionsRestricted): ScoreCache
     {
         $this->submissions_restricted = $submissionsRestricted;
@@ -261,6 +269,17 @@ class ScoreCache
     public function getProblem(): Problem
     {
         return $this->problem;
+    }
+
+    public function setVpid(int $vpid): ScoreCache
+    {
+        $this->vpid = $vpid;
+        return $this;
+    }
+
+    public function getVpid(): int
+    {
+        return $this->vpid;
     }
 
     public function getSubmissions(bool $restricted): int

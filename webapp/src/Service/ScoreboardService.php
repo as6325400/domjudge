@@ -13,11 +13,13 @@ use App\Entity\Submission;
 use App\Entity\Team;
 use App\Entity\TeamAffiliation;
 use App\Entity\TeamCategory;
+use App\Entity\VirtualParticipation;
 use App\Utils\FreezeData;
 use App\Utils\Scoreboard\Filter;
 use App\Utils\Scoreboard\Scoreboard;
 use App\Utils\Scoreboard\SingleTeamScoreboard;
 use App\Utils\Scoreboard\TeamScore;
+use App\Utils\Scoreboard\VirtualTeamWrapper;
 use App\Utils\Utils;
 use Doctrine\Common\Collections\Order;
 use Doctrine\DBAL\ArrayParameterType;
@@ -60,6 +62,7 @@ class ScoreboardService
         ?Filter $filter = null,
         bool $visibleOnly = false,
         bool $forceUnfrozen = false,
+        ?VirtualParticipation $viewerVp = null,
     ): ?Scoreboard {
         $freezeData = new FreezeData($contest);
 
@@ -69,11 +72,43 @@ class ScoreboardService
         }
         $restricted = ($jury || $freezeData->showFinal(false));
 
-        $teams      = $this->getTeamsInOrder($contest, $jury && !$visibleOnly, $filter, $restricted);
+        $participationType = $filter?->participationType ?? Filter::PARTICIPATION_LIVE;
+        $includeLive = $participationType !== Filter::PARTICIPATION_VIRTUAL;
+        $includeVirtual = $participationType !== Filter::PARTICIPATION_LIVE && $contest->getAllowVirtual();
+
+        // Collect teams and cache data.
+        $teams      = [];
+        $scoreCache = [];
+        $rankCache  = [];
+
+        if ($includeLive) {
+            $teams      = $this->getTeamsInOrder($contest, $jury && !$visibleOnly, $filter, $restricted, 0);
+            $scoreCache = $this->getScorecache($contest, null, 0);
+            $rankCache  = $this->getRankcache($contest, null, 0);
+        }
+
+        if ($includeVirtual) {
+            $this->addVirtualParticipationEntries(
+                $contest, $teams, $scoreCache, $rankCache, $restricted, $jury && !$visibleOnly
+            );
+        }
+
+        // Ghost dynamic replay: when a virtual participant views the scoreboard,
+        // filter all entries so they only see what happened by their current relative time.
+        if ($viewerVp !== null) {
+            $viewerRelativeTime = $viewerVp->getRelativeTime(Utils::now());
+            // Cap at VP duration so completed VPs see the full scoreboard.
+            $viewerRelativeTime = min($viewerRelativeTime, (float)$viewerVp->getDuration());
+            $this->applyGhostTimeFilter($contest, $scoreCache, $rankCache, $teams, $viewerRelativeTime);
+        }
+
+        // Sort after ghost filter so rankings reflect the filtered scores.
+        if ($includeVirtual) {
+            $this->sortTeamsWithVirtual($teams, $rankCache, $restricted);
+        }
+
         $problems   = $this->getProblems($contest);
         $categories = $this->getCategories($jury && !$visibleOnly);
-        $scoreCache = $this->getScorecache($contest);
-        $rankCache  = $this->getRankcache($contest);
 
         return new Scoreboard(
             $contest, $teams, $categories, $problems,
@@ -81,6 +116,251 @@ class ScoreboardService
             (int)$this->config->get('penalty_time'),
             (bool)$this->config->get('score_in_seconds'),
         );
+    }
+
+    /**
+     * Add virtual participation entries to the scoreboard data arrays.
+     *
+     * For each completed virtual participation, creates a VirtualTeamWrapper
+     * entry with its own score/rank cache data, using negative IDs to avoid
+     * collisions with real team IDs.
+     *
+     * @param Team[]       $teams      Teams array (indexed by teamid), modified in-place
+     * @param ScoreCache[] $scoreCache Score cache array, modified in-place
+     * @param RankCache[]  $rankCache  Rank cache array, modified in-place
+     */
+    protected function addVirtualParticipationEntries(
+        Contest $contest,
+        array &$teams,
+        array &$scoreCache,
+        array &$rankCache,
+        bool $restricted,
+        bool $jury,
+    ): void {
+        // Fetch all virtual participations (both active and completed) for this contest.
+        /** @var VirtualParticipation[] $virtualParticipations */
+        $virtualParticipations = $this->em->createQueryBuilder()
+            ->from(VirtualParticipation::class, 'vp')
+            ->select('vp')
+            ->andWhere('vp.contest = :contest')
+            ->setParameter('contest', $contest)
+            ->getQuery()
+            ->getResult();
+
+        foreach ($virtualParticipations as $vp) {
+            $team = $vp->getTeam();
+            if (!$team->getEnabled()) {
+                continue;
+            }
+            if (!$jury && $team->getCategory() && !$team->getCategory()->getVisible()) {
+                continue;
+            }
+
+            $vpid = $vp->getVpid();
+            $wrapper = new VirtualTeamWrapper($team, $vp);
+            $virtualTeamId = $wrapper->getTeamid();
+
+            // Add the virtual team wrapper to the teams array.
+            $teams[$virtualTeamId] = $wrapper;
+
+            // Fetch score cache for this VP.
+            $vpScoreCache = $this->getScorecache($contest, $team, $vpid);
+            foreach ($vpScoreCache as $sc) {
+                // Remap team reference: we need the score cache entries to be
+                // associated with the virtual team ID for the Scoreboard class.
+                // We create a clone and override the team to our wrapper.
+                $clonedSc = clone $sc;
+                $clonedSc->setTeam($wrapper);
+                $scoreCache[] = $clonedSc;
+            }
+
+            // Fetch rank cache for this VP.
+            $vpRankCache = $this->getRankcache($contest, $team, $vpid);
+            foreach ($vpRankCache as $rc) {
+                $clonedRc = clone $rc;
+                $clonedRc->setTeam($wrapper);
+                $rankCache[] = $clonedRc;
+            }
+        }
+    }
+
+    /**
+     * Sort teams array so virtual entries are interleaved with real teams in
+     * correct ranking order (sortorder ASC, sortKey DESC, name ASC).
+     *
+     * @param Team[]      $teams     Teams array (indexed by teamid), modified in-place
+     * @param RankCache[] $rankCache Rank cache array to look up sort keys
+     */
+    protected function sortTeamsWithVirtual(array &$teams, array $rankCache, bool $restricted): void
+    {
+        // Build a map from teamid -> sortKey for quick lookup.
+        $sortKeyMap = [];
+        foreach ($rankCache as $rc) {
+            $sortKeyMap[$rc->getTeam()->getTeamid()] = $restricted
+                ? $rc->getSortKeyRestricted()
+                : $rc->getSortKeyPublic();
+        }
+
+        // Default sort key for teams with no RankCache entry (0 solved, 0 time, 0 last correct).
+        // This ensures they rank equally with teams whose scores were filtered to zero.
+        $defaultSortKey = self::getICPCScoreKey(0, 0, 0);
+
+        uasort($teams, function (Team $a, Team $b) use ($sortKeyMap, $defaultSortKey) {
+            // 1. Sort by category sortorder ASC.
+            $soA = $a->getCategory() ? $a->getCategory()->getSortorder() : 0;
+            $soB = $b->getCategory() ? $b->getCategory()->getSortorder() : 0;
+            if ($soA !== $soB) {
+                return $soA <=> $soB;
+            }
+            // 2. Sort by sortKey DESC (higher = better).
+            $skA = $sortKeyMap[$a->getTeamid()] ?? $defaultSortKey;
+            $skB = $sortKeyMap[$b->getTeamid()] ?? $defaultSortKey;
+            if ($skA !== $skB) {
+                return $skB <=> $skA; // DESC
+            }
+            // 3. Sort by name ASC.
+            return $a->getEffectiveName() <=> $b->getEffectiveName();
+        });
+    }
+
+    /**
+     * Apply ghost time filtering to ScoreCache and RankCache arrays.
+     *
+     * For each ScoreCache entry where the problem was solved after the viewer's
+     * current relative time, mask it as unsolved. Then rebuild RankCache entries
+     * in-memory to match the filtered ScoreCache data.
+     *
+     * @param ScoreCache[] $scoreCache Modified in-place
+     * @param RankCache[]  $rankCache  Replaced in-place with recomputed entries
+     * @param Team[]       $teams      All teams on the scoreboard (to ensure every team gets a RankCache)
+     * @param float        $viewerRelativeTime Viewer's seconds into contest
+     */
+    protected function applyGhostTimeFilter(
+        Contest $contest,
+        array &$scoreCache,
+        array &$rankCache,
+        array $teams,
+        float $viewerRelativeTime,
+    ): void {
+        $penaltyTime      = (int)$this->config->get('penalty_time');
+        $scoreIsInSeconds = (bool)$this->config->get('score_in_seconds');
+
+        /** @var ContestProblem[] $contestProblems */
+        $contestProblems = [];
+        foreach ($contest->getProblems() as $cp) {
+            $contestProblems[$cp->getProbid()] = $cp;
+        }
+
+        // Phase 1: Filter ScoreCache entries — mask solves that happen after viewer's time.
+        foreach ($scoreCache as $key => $sc) {
+            $needsFilter = false;
+
+            // Check restricted audience solve time.
+            if ($sc->getIsCorrectRestricted() && (float)$sc->getSolvetimeRestricted() > $viewerRelativeTime) {
+                $needsFilter = true;
+            }
+            // Check public audience solve time.
+            if ($sc->getIsCorrectPublic() && (float)$sc->getSolvetimePublic() > $viewerRelativeTime) {
+                $needsFilter = true;
+            }
+
+            if ($needsFilter) {
+                $filtered = clone $sc;
+                // Mask restricted if solved after viewer's time.
+                // Also clear submission count so cell shows "not attempted" (blank)
+                // instead of "attempted but wrong" (red).
+                if ($sc->getIsCorrectRestricted() && (float)$sc->getSolvetimeRestricted() > $viewerRelativeTime) {
+                    $filtered->setIsCorrectRestricted(false);
+                    $filtered->setSolvetimeRestricted(0);
+                    $filtered->setRuntimeRestricted(0);
+                    $filtered->setSubmissionsRestricted(0);
+                    $filtered->setPendingRestricted(0);
+                    $filtered->setIsFirstToSolve(false);
+                }
+                // Mask public if solved after viewer's time.
+                if ($sc->getIsCorrectPublic() && (float)$sc->getSolvetimePublic() > $viewerRelativeTime) {
+                    $filtered->setIsCorrectPublic(false);
+                    $filtered->setSolvetimePublic(0);
+                    $filtered->setRuntimePublic(0);
+                    $filtered->setSubmissionsPublic(0);
+                    $filtered->setPendingPublic(0);
+                    $filtered->setIsFirstToSolve(false);
+                }
+                $scoreCache[$key] = $filtered;
+            }
+        }
+
+        // Phase 2: Rebuild RankCache from the filtered ScoreCache.
+        // Group ScoreCache by teamid.
+        $teamScores = [];
+        foreach ($scoreCache as $sc) {
+            $teamId = $sc->getTeam()->getTeamid();
+            $teamScores[$teamId][] = $sc;
+        }
+
+        $newRankCache = [];
+        // Build a lookup of existing RankCache entries to preserve team references.
+        $existingRcByTeam = [];
+        foreach ($rankCache as $rc) {
+            $existingRcByTeam[$rc->getTeam()->getTeamid()] = $rc;
+        }
+
+        // Iterate ALL teams so every team gets a RankCache entry (even those
+        // without any scorecache). This ensures consistent sort keys and ranks.
+        foreach ($teams as $teamId => $team) {
+            $variants = ['public' => false, 'restricted' => true];
+            $numPoints = [];
+            $totalTime = [];
+            $totalRuntime = [];
+            $timeOfLastCorrect = [];
+
+            foreach ($variants as $variant => $isRestricted) {
+                $numPoints[$variant] = 0;
+                $totalTime[$variant] = $team->getPenalty();
+                $totalRuntime[$variant] = 0;
+                $timeOfLastCorrect[$variant] = 0;
+            }
+
+            foreach ($teamScores[$teamId] ?? [] as $sc) {
+                $probId = $sc->getProblem()->getProbid();
+                foreach ($variants as $variant => $isRestricted) {
+                    $isCorrect = $sc->getIsCorrect($isRestricted);
+                    if (isset($contestProblems[$probId]) && $isCorrect) {
+                        $submissions = $sc->getSubmissions($isRestricted);
+                        $penalty = Utils::calcPenaltyTime(true, $submissions, $penaltyTime, $scoreIsInSeconds);
+                        $numPoints[$variant] += $contestProblems[$probId]->getPoints();
+                        $solveTime = (float)$sc->getSolveTime($isRestricted);
+                        $solveTimeForProblem = Utils::scoretime($solveTime, $scoreIsInSeconds);
+                        $timeOfLastCorrect[$variant] = max($timeOfLastCorrect[$variant], $solveTimeForProblem);
+                        $totalTime[$variant] += $solveTimeForProblem + $penalty;
+                        $totalRuntime[$variant] += $sc->getRuntime($isRestricted);
+                    }
+                }
+            }
+
+            if (isset($existingRcByTeam[$teamId])) {
+                $rc = clone $existingRcByTeam[$teamId];
+            } else {
+                $rc = new RankCache();
+                $rc->setContest($contest);
+                $rc->setTeam($team);
+            }
+            $rc->setPointsRestricted($numPoints['restricted']);
+            $rc->setTotaltimeRestricted($totalTime['restricted']);
+            $rc->setTotalruntimeRestricted($totalRuntime['restricted']);
+            $rc->setPointsPublic($numPoints['public']);
+            $rc->setTotaltimePublic($totalTime['public']);
+            $rc->setTotalruntimePublic($totalRuntime['public']);
+            $rc->setSortKeyRestricted(self::getICPCScoreKey(
+                $numPoints['restricted'], $totalTime['restricted'], $timeOfLastCorrect['restricted']
+            ));
+            $rc->setSortKeyPublic(self::getICPCScoreKey(
+                $numPoints['public'], $totalTime['public'], $timeOfLastCorrect['public']
+            ));
+            $newRankCache[] = $rc;
+        }
+
+        $rankCache = $newRankCache;
     }
 
     /**
@@ -92,19 +372,24 @@ class ScoreboardService
      * @param bool    $showFtsInFreeze If false, the scoreboard will hide first
      *                                 to solve for submissions after contest freeze.
      */
-    public function getTeamScoreboard(Contest $contest, int $teamId, bool $showFtsInFreeze = true): ?Scoreboard
-    {
+    public function getTeamScoreboard(
+        Contest $contest,
+        int $teamId,
+        bool $showFtsInFreeze = true,
+        ?VirtualParticipation $vp = null,
+    ): ?Scoreboard {
         $freezeData = new FreezeData($contest);
+        $vpid = $vp !== null ? $vp->getVpid() : 0;
 
-        $teams = $this->getTeamsInOrder($contest, true, new Filter([], [], [], [$teamId]), true);
+        $teams = $this->getTeamsInOrder($contest, true, new Filter([], [], [], [$teamId]), true, $vpid);
         if (empty($teams)) {
             return null;
         }
         $team       = reset($teams);
         $problems   = $this->getProblems($contest);
-        $rankCache  = $this->getRankcache($contest, $team);
-        $scoreCache = $this->getScorecache($contest, $team);
-        $teamRank   = $this->calculateTeamRank($contest, $team, $freezeData, true);
+        $rankCache  = $this->getRankcache($contest, $team, $vpid);
+        $scoreCache = $this->getScorecache($contest, $team, $vpid);
+        $teamRank   = $this->calculateTeamRank($contest, $team, $freezeData, true, $vpid);
 
         return new SingleTeamScoreboard(
             $contest, $team, $teamRank, $problems,
@@ -124,7 +409,8 @@ class ScoreboardService
         Contest $contest,
         Team $team,
         ?FreezeData $freezeData = null,
-        bool $jury = false
+        bool $jury = false,
+        int $vpid = 0
     ): int {
         if ($freezeData === null) {
             $freezeData = new FreezeData($contest);
@@ -138,8 +424,10 @@ class ScoreboardService
             ->select('r.sortKey'.$variant)
             ->andWhere('r.contest = :contest')
             ->andWhere('r.team = :team')
+            ->andWhere('r.vpid = :vpid')
             ->setParameter('contest', $contest)
             ->setParameter('team', $team)
+            ->setParameter('vpid', $vpid)
             ->getQuery()
             ->getOneOrNullResult();
 
@@ -156,9 +444,11 @@ class ScoreboardService
             ->select('COUNT(t.teamid)')
             ->andWhere('r.sortKey'.$variant.' > :sortKey')
             ->andWhere('r.contest = :contest')
+            ->andWhere('r.vpid = :vpid')
             ->andWhere('tc.sortorder = :sortorder')
             ->setParameter('sortKey', $sortKey)
             ->setParameter('contest', $contest)
+            ->setParameter('vpid', $vpid)
             ->setParameter('sortorder', $sortOrder)
             ->getQuery()
             ->getSingleScalarResult();
@@ -183,11 +473,13 @@ class ScoreboardService
         Contest $contest,
         Team    $team,
         Problem $problem,
-        bool    $updateRankCache = true
+        bool    $updateRankCache = true,
+        ?VirtualParticipation $vp = null
     ): void {
+        $vpid = $vp !== null ? $vp->getVpid() : 0;
         $this->logger->debug(
-            "ScoreboardService::calculateScoreRow '%d' '%d' '%d'",
-            [ $contest->getCid(), $team->getTeamid(), $problem->getProbid() ]
+            "ScoreboardService::calculateScoreRow '%d' '%d' '%d' vpid='%d'",
+            [ $contest->getCid(), $team->getTeamid(), $problem->getProbid(), $vpid ]
         );
 
         if (!$team->getCategory()) {
@@ -200,8 +492,8 @@ class ScoreboardService
 
         // First acquire an advisory lock to prevent other calls to this
         // method from interfering with our update.
-        $lockString = sprintf('domjudge.%d.%d.%d',
-                              $contest->getCid(), $team->getTeamid(), $problem->getProbid());
+        $lockString = sprintf('domjudge.%d.%d.%d.%d',
+                              $contest->getCid(), $team->getTeamid(), $problem->getProbid(), $vpid);
         if ($this->em->getConnection()->fetchOne('SELECT GET_LOCK(:lock, 3)',
                                                     ['lock' => $lockString]) != 1) {
             throw new Exception(sprintf("ScoreboardService::calculateScoreRow failed to obtain lock '%s'",
@@ -224,11 +516,22 @@ class ScoreboardService
             ->andWhere('s.problem = :probid')
             ->andWhere('s.contest = :cid')
             ->andWhere('s.valid = 1')
-            ->andWhere('s.submittime < c.endtime')
             ->setParameter('teamid', $team)
             ->setParameter('probid', $problem)
             ->setParameter('cid', $contest)
             ->orderBy('s.submittime');
+
+        if ($vp !== null) {
+            // Virtual participation: filter by vpid and use VP end time.
+            $queryBuilder
+                ->andWhere('s.virtualParticipation = :vp')
+                ->setParameter('vp', $vp);
+        } else {
+            // Live participation: filter to live submissions only and use contest end time.
+            $queryBuilder
+                ->andWhere('s.virtualParticipation IS NULL')
+                ->andWhere('s.submittime < c.endtime');
+        }
 
         if ($useExternalJudgements) {
             $queryBuilder
@@ -257,7 +560,10 @@ class ScoreboardService
         $runtimeJury     = PHP_INT_MAX;
         $runtimePubl     = PHP_INT_MAX;
 
-        $contestStartTime = $contest->getStarttime();
+        // For virtual participations, use the VP start time as the reference.
+        // Virtual participations have no freeze.
+        $isVirtual = $vp !== null;
+        $contestStartTime = $isVirtual ? (float)$vp->getVirtualStarttime() : $contest->getStarttime();
 
         foreach ($submissions as $submission) {
             /** @var Judging|ExternalJudgement|null $judging */
@@ -272,12 +578,16 @@ class ScoreboardService
             // 2. count submissions until correct submission
             // 3. determine time of first correct submission
 
+            // For virtual participations, there is no freeze, so isAfterFreeze
+            // is always false.
+            $afterFreeze = !$isVirtual && $submission->isAfterFreeze();
+
             // STEP 1:
             // runtime improvements should be possible for all correct submissions
             if (!is_null($judging) && $judging->getResult() == Judging::RESULT_CORRECT) {
                 $runtime = (int) floor(1000*$judging->getMaxRuntime()); // round to milliseconds
                 $runtimeJury = min($runtimeJury, $runtime);
-                if (!$submission->isAfterFreeze()) {
+                if (!$afterFreeze) {
                     $runtimePubl = min($runtimePubl, $runtime);
                 }
             }
@@ -315,7 +625,7 @@ class ScoreboardService
                 // the public to not leak any info.
                 $submissionsJury++;
             }
-            if ($submission->isAfterFreeze()) {
+            if ($afterFreeze) {
                 // Show submissions after freeze as pending to the public (if
                 // SHOW_PENDING is enabled). Note that we even show these
                 // submissions if they are a compiler-error and
@@ -335,12 +645,17 @@ class ScoreboardService
             $absSubmitTime = (float)$submission->getSubmittime();
             // Negative numbers don't make sense on the scoreboard, cap them to the contest start.
             $absSubmitTime = max($absSubmitTime, $contestStartTime);
-            $submitTime    = $contest->getContestTime($absSubmitTime);
+            if ($isVirtual) {
+                // For virtual participation, calculate relative time from VP start.
+                $submitTime = $absSubmitTime - $contestStartTime;
+            } else {
+                $submitTime = $contest->getContestTime($absSubmitTime);
+            }
 
             if ($judging->getResult() == Judging::RESULT_CORRECT) {
                 $correctJury = true;
                 $timeJury    = $submitTime;
-                if (!$submission->isAfterFreeze()) {
+                if (!$afterFreeze) {
                     $correctPubl = true;
                     $timePubl    = $submitTime;
                 }
@@ -360,16 +675,17 @@ class ScoreboardService
                 'correctResult' => Judging::RESULT_CORRECT,
             ];
 
+            // For virtual participations, first-to-solve is scoped to the same vpid.
+            $vpFilter = $isVirtual
+                ? 's.vpid = :vpid'
+                : 's.vpid IS NULL';
+            if ($isVirtual) {
+                $params['vpid'] = $vpid;
+            }
+
             // Find out how many valid submissions were submitted earlier
             // that have a valid judging that is correct, or are awaiting judgement.
             // Only if there are 0 found, we are definitely the first to solve this problem.
-            // To find relevant submissions/judgings:
-            // - submission needs to be valid (not invalidated)
-            // - a valid judging is present, but
-            //   - either it's still ongoing (pending judgement, could be correct)
-            //   - or already judged to be correct (if it is judged but not correct,
-            //     it is not a first to solve)
-            // - or the submission is still queued for judgement (judgehost is NULL).
             $verificationRequiredExtra = $verificationRequired ? 'OR j.verified = 0' : '';
             if ($useExternalJudgements) {
                 $firstToSolve = 0 == $this->em->getConnection()->fetchOne('
@@ -378,7 +694,7 @@ class ScoreboardService
                     LEFT JOIN external_judgement ej2 ON ej2.submitid = s.submitid AND ej2.starttime > ej.starttime
                     LEFT JOIN team t USING(teamid)
                     LEFT JOIN team_category tc USING (categoryid)
-                WHERE s.valid = 1 AND
+                WHERE s.valid = 1 AND '.$vpFilter.' AND
                     (ej.result IS NULL OR ej.result = :correctResult '.
                     $verificationRequiredExtra.') AND
                     s.cid = :cid AND s.probid = :probid AND
@@ -390,7 +706,7 @@ class ScoreboardService
                     LEFT JOIN judging j ON (s.submitid=j.submitid AND j.valid=1)
                     LEFT JOIN team t USING (teamid)
                     LEFT JOIN team_category tc USING (categoryid)
-                WHERE s.valid = 1 AND
+                WHERE s.valid = 1 AND '.$vpFilter.' AND
                     (j.judgingid IS NULL OR j.result IS NULL OR j.result = :correctResult '.
                     $verificationRequiredExtra.') AND
                     s.cid = :cid AND s.probid = :probid AND
@@ -404,6 +720,7 @@ class ScoreboardService
             'cid' => $contest->getCid(),
             'teamid' => $team->getTeamid(),
             'probid' => $problem->getProbid(),
+            'vpid' => $vpid,
             'submissionsRestricted' => $submissionsJury,
             'pendingRestricted' => $pendingJury,
             'solvetimeRestricted' => (int)$timeJury,
@@ -417,10 +734,10 @@ class ScoreboardService
             'isFirstToSolve' => (int)$firstToSolve,
         ];
         $this->em->getConnection()->executeQuery('REPLACE INTO scorecache
-            (cid, teamid, probid,
+            (cid, teamid, probid, vpid,
              submissions_restricted, pending_restricted, solvetime_restricted, runtime_restricted, is_correct_restricted,
              submissions_public, pending_public, solvetime_public, runtime_public, is_correct_public, is_first_to_solve)
-            VALUES (:cid, :teamid, :probid, :submissionsRestricted, :pendingRestricted, :solvetimeRestricted, :runtimeRestricted, :isCorrectRestricted,
+            VALUES (:cid, :teamid, :probid, :vpid, :submissionsRestricted, :pendingRestricted, :solvetimeRestricted, :runtimeRestricted, :isCorrectRestricted,
             :submissionsPublic, :pendingPublic, :solvetimePublic, :runtimePublic, :isCorrectPublic, :isFirstToSolve)', $params);
 
         if ($this->em->getConnection()->fetchOne('SELECT RELEASE_LOCK(:lock)',
@@ -430,7 +747,7 @@ class ScoreboardService
 
         // If we found a new correct result, update the rank cache too.
         if ($updateRankCache && ($correctJury || $correctPubl)) {
-            $this->updateRankCache($contest, $team);
+            $this->updateRankCache($contest, $team, $vp);
         }
     }
 
@@ -442,14 +759,15 @@ class ScoreboardService
      * Due to current transactions usage, this function MUST NOT do anything
      * inside a transaction.
      */
-    public function updateRankCache(Contest $contest, Team $team): void
+    public function updateRankCache(Contest $contest, Team $team, ?VirtualParticipation $vp = null): void
     {
-        $this->logger->debug("ScoreboardService::updateRankCache '%d' '%d'",
-                             [ $contest->getCid(), $team->getTeamid() ]);
+        $vpid = $vp !== null ? $vp->getVpid() : 0;
+        $this->logger->debug("ScoreboardService::updateRankCache '%d' '%d' vpid='%d'",
+                             [ $contest->getCid(), $team->getTeamid(), $vpid ]);
 
         // First acquire an advisory lock to prevent other calls to this
         // method from interfering with our update.
-        $lockString = sprintf('domjudge.%d.%d', $contest->getCid(), $team->getTeamid());
+        $lockString = sprintf('domjudge.%d.%d.%d', $contest->getCid(), $team->getTeamid(), $vpid);
         if ($this->em->getConnection()->fetchOne('SELECT GET_LOCK(:lock, 3)',
                                                     ['lock' => $lockString]) != 1) {
             throw new Exception(sprintf("ScoreboardService::updateRankCache failed to obtain lock '%s'", $lockString));
@@ -488,35 +806,31 @@ class ScoreboardService
         $penaltyTime      = (int) $this->config->get('penalty_time');
         $scoreIsInSeconds = (bool)$this->config->get('score_in_seconds');
 
-        // Now fetch the ScoreCache entries.
+        // Now fetch the ScoreCache entries for this specific vpid.
         /** @var ScoreCache[] $scoreCacheCells */
-        $scoreCacheCells = $this->em->createQueryBuilder()
-            ->from(ScoreCache::class, 's')
-            ->select('s')
-            ->andWhere('s.contest = :contest')
-            ->andWhere('s.team = :team')
-            ->setParameter('contest', $contest)
-            ->setParameter('team', $team)
-            ->getQuery()
-            ->getResult();
+        $scoreCacheCells = $this->em->getConnection()->fetchAllAssociative(
+            'SELECT * FROM scorecache WHERE cid = :cid AND teamid = :teamid AND vpid = :vpid',
+            ['cid' => $contest->getCid(), 'teamid' => $team->getTeamid(), 'vpid' => $vpid]
+        );
 
         // Process all score cache cells.
-        foreach ($scoreCacheCells as $scoreCacheCell) {
+        foreach ($scoreCacheCells as $row) {
             foreach ($variants as $variant => $isRestricted) {
-                $probId = $scoreCacheCell->getProblem()->getProbid();
-                if (isset($contestProblems[$probId]) && $scoreCacheCell->getIsCorrect($isRestricted)) {
-                    $penalty = Utils::calcPenaltyTime($scoreCacheCell->getIsCorrect($isRestricted),
-                                                      $scoreCacheCell->getSubmissions($isRestricted),
-                                                      $penaltyTime, $scoreIsInSeconds);
+                $probId = $row['probid'];
+                $isCorrect = $isRestricted ? $row['is_correct_restricted'] : $row['is_correct_public'];
+                if (isset($contestProblems[$probId]) && $isCorrect) {
+                    $submissions = $isRestricted ? $row['submissions_restricted'] : $row['submissions_public'];
+                    $penalty = Utils::calcPenaltyTime(
+                        (bool)$isCorrect, (int)$submissions, $penaltyTime, $scoreIsInSeconds
+                    );
 
                     $numPoints[$variant] += $contestProblems[$probId]->getPoints();
-                    $solveTimeForProblem = Utils::scoretime(
-                        (float)$scoreCacheCell->getSolveTime($isRestricted),
-                        $scoreIsInSeconds
-                    );
+                    $solveTime = $isRestricted ? $row['solvetime_restricted'] : $row['solvetime_public'];
+                    $solveTimeForProblem = Utils::scoretime((float)$solveTime, $scoreIsInSeconds);
                     $timeOfLastCorrect[$variant] = max($timeOfLastCorrect[$variant], $solveTimeForProblem);
                     $totalTime[$variant] += $solveTimeForProblem + $penalty;
-                    $totalRuntime[$variant] += $scoreCacheCell->getRuntime($isRestricted);
+                    $runtime = $isRestricted ? $row['runtime_restricted'] : $row['runtime_public'];
+                    $totalRuntime[$variant] += (int)$runtime;
                 }
             }
         }
@@ -533,6 +847,7 @@ class ScoreboardService
         $params = [
             'cid' => $contest->getCid(),
             'teamid' => $team->getTeamid(),
+            'vpid' => $vpid,
             'pointsRestricted' => $numPoints['restricted'],
             'totalTimeRestricted' => $totalTime['restricted'],
             'totalRuntimeRestricted' => $totalRuntime['restricted'],
@@ -542,10 +857,10 @@ class ScoreboardService
             'sortKeyRestricted' => $scoreKey['restricted'],
             'sortKeyPublic' => $scoreKey['public'],
         ];
-        $this->em->getConnection()->executeQuery('REPLACE INTO rankcache (cid, teamid,
+        $this->em->getConnection()->executeQuery('REPLACE INTO rankcache (cid, teamid, vpid,
             points_restricted, totaltime_restricted, totalruntime_restricted,
             points_public, totaltime_public, totalruntime_public, sort_key_restricted, sort_key_public)
-            VALUES (:cid, :teamid, :pointsRestricted, :totalTimeRestricted, :totalRuntimeRestricted,
+            VALUES (:cid, :teamid, :vpid, :pointsRestricted, :totalTimeRestricted, :totalRuntimeRestricted,
             :pointsPublic, :totalTimePublic, :totalRuntimePublic, :sortKeyRestricted, :sortKeyPublic)', $params);
 
         if ($this->em->getConnection()->fetchOne('SELECT RELEASE_LOCK(:lock)',
@@ -651,6 +966,22 @@ class ScoreboardService
         $first = true;
         $log = '';
 
+        // Fetch all virtual participations for this contest.
+        /** @var VirtualParticipation[] $virtualParticipations */
+        $virtualParticipations = $this->em->createQueryBuilder()
+            ->from(VirtualParticipation::class, 'vp')
+            ->select('vp')
+            ->andWhere('vp.contest = :contest')
+            ->setParameter('contest', $contest)
+            ->getQuery()
+            ->getResult();
+
+        // Index VPs by teamid for quick lookup.
+        $vpsByTeam = [];
+        foreach ($virtualParticipations as $vp) {
+            $vpsByTeam[$vp->getTeam()->getTeamid()][] = $vp;
+        }
+
         // for each team, fetch the status of each problem.
         foreach ($teams as $index => $team) {
             if (!$first) {
@@ -661,12 +992,22 @@ class ScoreboardService
             $progress = (int)round($index / count($teams) * 100);
             $progressReporter($progress, $log);
 
-            // for each problem fetch the result
+            // for each problem fetch the result (live participation)
             foreach ($problems as $problem) {
                 $this->calculateScoreRow($contest, $team, $problem, false);
             }
 
             $this->updateRankCache($contest, $team);
+
+            // Also refresh virtual participations for this team.
+            if (isset($vpsByTeam[$team->getTeamid()])) {
+                foreach ($vpsByTeam[$team->getTeamid()] as $vp) {
+                    foreach ($problems as $problem) {
+                        $this->calculateScoreRow($contest, $team, $problem, false, $vp);
+                    }
+                    $this->updateRankCache($contest, $team, $vp);
+                }
+            }
         }
 
         // Drop all teams and problems that do not exist in the contest.
@@ -722,6 +1063,12 @@ class ScoreboardService
             }
         }
 
+        // Handle participation type filter separately (not stored in cookie).
+        $participationType = $request->query->get('participation', Filter::PARTICIPATION_LIVE);
+        if (!in_array($participationType, [Filter::PARTICIPATION_LIVE, Filter::PARTICIPATION_VIRTUAL, Filter::PARTICIPATION_ALL], true)) {
+            $participationType = Filter::PARTICIPATION_LIVE;
+        }
+
         $this->dj->setCookie(
             'domjudge_scorefilter',
             Utils::jsonEncode($scoreFilter),
@@ -732,7 +1079,8 @@ class ScoreboardService
             $scoreFilter['affiliations'] ?? [],
             $scoreFilter['countries'] ?? [],
             $scoreFilter['categories'] ?? [],
-            $scoreFilter['teams'] ?? []
+            $scoreFilter['teams'] ?? [],
+            $participationType,
         );
     }
 
@@ -879,6 +1227,7 @@ class ScoreboardService
         ?Contest $contest = null,
         ?Scoreboard $scoreboard = null,
         bool $forceUnfrozen = false,
+        ?VirtualParticipation $viewerVp = null,
     ): array {
         $data = [
             'refresh' => [
@@ -904,7 +1253,8 @@ class ScoreboardService
                     contest: $contest,
                     jury: $jury,
                     filter: $scoreFilter,
-                    forceUnfrozen: $forceUnfrozen
+                    forceUnfrozen: $forceUnfrozen,
+                    viewerVp: $viewerVp,
                 );
             }
 
@@ -932,6 +1282,8 @@ class ScoreboardService
             $data['showTeamSubmissions']  = $this->config->get('show_teams_submissions');
             $data['scoreInSeconds']       = $this->config->get('score_in_seconds');
             $data['maxWidth']             = $this->config->get('team_column_width');
+            $data['allowVirtual']         = $contest->getAllowVirtual();
+            $data['participationType']    = $scoreFilter?->participationType ?? Filter::PARTICIPATION_LIVE;
         }
 
         if ($request && $request->isXmlHttpRequest()) {
@@ -947,16 +1299,17 @@ class ScoreboardService
      * Get the teams to display on the scoreboard, returns them in order.
      * @return Team[]
      */
-    protected function getTeamsInOrder(Contest $contest, bool $jury = false, ?Filter $filter = null, bool $restricted = false): array
+    protected function getTeamsInOrder(Contest $contest, bool $jury = false, ?Filter $filter = null, bool $restricted = false, int $vpid = 0): array
     {
         $queryBuilder = $this->em->createQueryBuilder()
             ->from(Team::class, 't', 't.teamid')
             ->innerJoin('t.category', 'tc')
-            ->leftJoin(RankCache::class, 'r', Join::WITH, 'r.team = t AND r.contest = :rcid')
+            ->leftJoin(RankCache::class, 'r', Join::WITH, 'r.team = t AND r.contest = :rcid AND r.vpid = :rvpid')
             ->leftJoin('t.affiliation', 'ta')
             ->select('t, tc, ta', 'COALESCE(t.display_name, t.name) AS HIDDEN effectivename')
             ->andWhere('t.enabled = 1')
-            ->setParameter('rcid', $contest->getCid());
+            ->setParameter('rcid', $contest->getCid())
+            ->setParameter('rvpid', $vpid);
 
         if (!$contest->isOpenToAllTeams()) {
             $queryBuilder
@@ -974,8 +1327,9 @@ class ScoreboardService
                 $queryBuilder
                     ->join('t.users', 'u', Join::WITH, 'u.last_login IS NOT NULL OR u.last_api_login IS NOT NULL');
             } elseif ($show_filter === self::SHOW_TEAM_AFTER_SUBMIT) {
+                $vpCondition = $vpid === 0 ? ' AND s.virtualParticipation IS NULL' : '';
                 $queryBuilder
-                    ->join('t.submissions', 's', Join::WITH, 's.contest = :cid')
+                    ->join('t.submissions', 's', Join::WITH, 's.contest = :cid' . $vpCondition)
                     ->setParameter('cid', $contest->getCid());
             }
         }
@@ -1078,13 +1432,15 @@ class ScoreboardService
      * Get the scorecache used to calculate the scoreboard.
      * @return ScoreCache[]
      */
-    protected function getScorecache(Contest $contest, ?Team $team = null): array
+    protected function getScorecache(Contest $contest, ?Team $team = null, int $vpid = 0): array
     {
         $queryBuilder = $this->em->createQueryBuilder()
             ->from(ScoreCache::class, 's')
             ->select('s')
             ->andWhere('s.contest = :contest')
-            ->setParameter('contest', $contest);
+            ->andWhere('s.vpid = :vpid')
+            ->setParameter('contest', $contest)
+            ->setParameter('vpid', $vpid);
 
         if ($team) {
             $queryBuilder
@@ -1100,13 +1456,15 @@ class ScoreboardService
      * @throws NonUniqueResultException
      * @return RankCache[]
      */
-    protected function getRankcache(Contest $contest, ?Team $team = null): array
+    protected function getRankcache(Contest $contest, ?Team $team = null, int $vpid = 0): array
     {
         $queryBuilder = $this->em->createQueryBuilder()
             ->from(RankCache::class, 'r')
             ->select('r')
             ->andWhere('r.contest = :contest')
-            ->setParameter('contest', $contest);
+            ->andWhere('r.vpid = :vpid')
+            ->setParameter('contest', $contest)
+            ->setParameter('vpid', $vpid);
 
         if ($team !== null) {
             $queryBuilder

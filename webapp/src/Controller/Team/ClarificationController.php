@@ -8,9 +8,11 @@ use App\Entity\Contest;
 use App\Entity\Problem;
 use App\Entity\Team;
 use App\Form\Type\TeamClarificationType;
+use App\Entity\VirtualParticipation;
 use App\Service\ConfigurationService;
 use App\Service\DOMJudgeService;
 use App\Service\EventLogService;
+use App\Service\VirtualContestService;
 use App\Utils\Utils;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\ORM\NonUniqueResultException;
@@ -40,6 +42,7 @@ class ClarificationController extends BaseController
         EntityManagerInterface $em,
         protected readonly EventLogService $eventLogService,
         protected readonly FormFactoryInterface $formFactory,
+        protected readonly VirtualContestService $virtualContestService,
         KernelInterface $kernel,
     ) {
         parent::__construct($em, $eventLogService, $dj, $kernel);
@@ -110,6 +113,14 @@ class ClarificationController extends BaseController
         $user       = $this->dj->getUser();
         $team       = $user->getTeam();
         $contest    = $this->dj->getCurrentContest($team->getTeamid());
+
+        // Check if the team is in a virtual participation.
+        $activeVp = null;
+        $isVirtual = false;
+        if ($contest && $contest->getAllowVirtual()) {
+            $activeVp = $this->virtualContestService->getActiveVirtualParticipation($contest, $team);
+            $isVirtual = $activeVp !== null;
+        }
         /** @var Clarification|null $clarification */
         $clarification = $this->em->createQueryBuilder()
             ->from(Clarification::class, 'c')
@@ -141,11 +152,13 @@ class ClarificationController extends BaseController
 
         $form->remove('subject');
 
-        $form->handleRequest($request);
+        if (!$isVirtual) {
+            $form->handleRequest($request);
 
-        if ($form->isSubmitted() && $form->isValid()) {
-            $this->newClarificationHelper($form, $contest, $team);
-            return $this->redirectToRoute('team_index');
+            if ($form->isSubmitted() && $form->isValid()) {
+                $this->newClarificationHelper($form, $contest, $team);
+                return $this->redirectToRoute('team_index');
+            }
         }
 
         if ($clarification === null) {
@@ -154,6 +167,17 @@ class ClarificationController extends BaseController
 
         if (!$team->canViewClarification($clarification)) {
             throw new HttpException(401, 'Permission denied');
+        }
+
+        // For virtual participants, check time-gating: only show clarifications
+        // whose contest-relative time <= the viewer's current VP relative time.
+        if ($isVirtual) {
+            $contestStartTime = (float)$contest->getStarttime();
+            $clarRelativeTime = (float)$clarification->getSubmittime() - $contestStartTime;
+            $vpRelativeTime = $activeVp->getRelativeTime(Utils::now());
+            if ($clarRelativeTime > $vpRelativeTime) {
+                throw new NotFoundHttpException('This clarification is not yet available in your virtual participation.');
+            }
         }
 
         // Get the "parent" message if we have one - if we have access to it
@@ -176,6 +200,7 @@ class ClarificationController extends BaseController
             'team' => $team,
             'categories' => $categories,
             'form' => $form->createView(),
+            'isVirtual' => $isVirtual,
         ];
 
         if ($request->isXmlHttpRequest()) {
@@ -192,6 +217,14 @@ class ClarificationController extends BaseController
         $user       = $this->dj->getUser();
         $team       = $user->getTeam();
         $contest    = $this->dj->getCurrentContest($team->getTeamid());
+
+        // Virtual participants cannot send clarifications.
+        if ($contest && $contest->getAllowVirtual()) {
+            $activeVp = $this->virtualContestService->getActiveVirtualParticipation($contest, $team);
+            if ($activeVp !== null) {
+                throw new HttpException(403, 'Virtual participants cannot send clarifications.');
+            }
+        }
 
         $formData = [];
         $form     = $this->formFactory
