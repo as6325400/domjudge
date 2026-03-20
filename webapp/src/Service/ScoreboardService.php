@@ -256,6 +256,10 @@ class ScoreboardService
         $correctPubl     = false;
         $runtimeJury     = PHP_INT_MAX;
         $runtimePubl     = PHP_INT_MAX;
+        $optscoreMaxJury = null;
+        $optscoreMinJury = null;
+        $optscoreMaxPubl = null;
+        $optscoreMinPubl = null;
 
         $contestStartTime = $contest->getStarttime();
 
@@ -279,6 +283,17 @@ class ScoreboardService
                 $runtimeJury = min($runtimeJury, $runtime);
                 if (!$submission->isAfterFreeze()) {
                     $runtimePubl = min($runtimePubl, $runtime);
+                }
+
+                // Track optscore for this correct submission
+                $judgingOptscore = $judging->getSumOptscore();
+                if ($judgingOptscore !== null) {
+                    $optscoreMaxJury = max($optscoreMaxJury ?? PHP_FLOAT_MIN, $judgingOptscore);
+                    $optscoreMinJury = min($optscoreMinJury ?? PHP_FLOAT_MAX, $judgingOptscore);
+                    if (!$submission->isAfterFreeze()) {
+                        $optscoreMaxPubl = max($optscoreMaxPubl ?? PHP_FLOAT_MIN, $judgingOptscore);
+                        $optscoreMinPubl = min($optscoreMinPubl ?? PHP_FLOAT_MAX, $judgingOptscore);
+                    }
                 }
             }
 
@@ -415,13 +430,19 @@ class ScoreboardService
             'runtimePublic' => $runtimePubl === PHP_INT_MAX ? 0 : $runtimePubl,
             'isCorrectPublic' => (int)$correctPubl,
             'isFirstToSolve' => (int)$firstToSolve,
+            'optscoreMaxRestricted' => $optscoreMaxJury,
+            'optscoreMinRestricted' => $optscoreMinJury,
+            'optscoreMaxPublic' => $optscoreMaxPubl,
+            'optscoreMinPublic' => $optscoreMinPubl,
         ];
         $this->em->getConnection()->executeQuery('REPLACE INTO scorecache
             (cid, teamid, probid,
              submissions_restricted, pending_restricted, solvetime_restricted, runtime_restricted, is_correct_restricted,
-             submissions_public, pending_public, solvetime_public, runtime_public, is_correct_public, is_first_to_solve)
+             submissions_public, pending_public, solvetime_public, runtime_public, is_correct_public, is_first_to_solve,
+             optscore_max_restricted, optscore_min_restricted, optscore_max_public, optscore_min_public)
             VALUES (:cid, :teamid, :probid, :submissionsRestricted, :pendingRestricted, :solvetimeRestricted, :runtimeRestricted, :isCorrectRestricted,
-            :submissionsPublic, :pendingPublic, :solvetimePublic, :runtimePublic, :isCorrectPublic, :isFirstToSolve)', $params);
+            :submissionsPublic, :pendingPublic, :solvetimePublic, :runtimePublic, :isCorrectPublic, :isFirstToSolve,
+            :optscoreMaxRestricted, :optscoreMinRestricted, :optscoreMaxPublic, :optscoreMinPublic)', $params);
 
         if ($this->em->getConnection()->fetchOne('SELECT RELEASE_LOCK(:lock)',
                                                     ['lock' => $lockString]) != 1) {
@@ -483,6 +504,8 @@ class ScoreboardService
             $totalTime[$variant] = $team->getPenalty();
             $totalRuntime[$variant] = 0;
             $timeOfLastCorrect[$variant] = 0;
+            $totalOptscoreMax[$variant] = null;
+            $totalOptscoreMin[$variant] = null;
         }
 
         $penaltyTime      = (int) $this->config->get('penalty_time');
@@ -517,16 +540,39 @@ class ScoreboardService
                     $timeOfLastCorrect[$variant] = max($timeOfLastCorrect[$variant], $solveTimeForProblem);
                     $totalTime[$variant] += $solveTimeForProblem + $penalty;
                     $totalRuntime[$variant] += $scoreCacheCell->getRuntime($isRestricted);
+
+                    $optscoreMax = $scoreCacheCell->getOptscoreMax($isRestricted);
+                    $optscoreMin = $scoreCacheCell->getOptscoreMin($isRestricted);
+                    if ($optscoreMax !== null) {
+                        $totalOptscoreMax[$variant] = ($totalOptscoreMax[$variant] ?? 0) + $optscoreMax;
+                    }
+                    if ($optscoreMin !== null) {
+                        $totalOptscoreMin[$variant] = ($totalOptscoreMin[$variant] ?? 0) + $optscoreMin;
+                    }
                 }
             }
         }
 
         foreach ($variants as $variant => $isRestricted) {
-            $scoreKey[$variant] = self::getICPCScoreKey(
-                $numPoints[$variant],
-                $totalTime[$variant],
-                $timeOfLastCorrect[$variant]
-            );
+            if ($contest->getOptScoreAsScoreTiebreaker()) {
+                $optscoreOrder = $contest->getOptScoreOrder() ?? 'asc';
+                $relevantOptscore = ($optscoreOrder === 'asc')
+                    ? ($totalOptscoreMin[$variant] ?? 0.0)
+                    : ($totalOptscoreMax[$variant] ?? 0.0);
+                $scoreKey[$variant] = self::getOptscoreICPCScoreKey(
+                    $numPoints[$variant],
+                    $totalTime[$variant],
+                    $timeOfLastCorrect[$variant],
+                    $relevantOptscore,
+                    $optscoreOrder
+                );
+            } else {
+                $scoreKey[$variant] = self::getICPCScoreKey(
+                    $numPoints[$variant],
+                    $totalTime[$variant],
+                    $timeOfLastCorrect[$variant]
+                );
+            }
         }
 
         // Use a direct REPLACE INTO query to drastically speed this up.
@@ -541,12 +587,18 @@ class ScoreboardService
             'totalRuntimePublic' => $totalRuntime['public'],
             'sortKeyRestricted' => $scoreKey['restricted'],
             'sortKeyPublic' => $scoreKey['public'],
+            'totalOptscoreMaxRestricted' => $totalOptscoreMax['restricted'],
+            'totalOptscoreMinRestricted' => $totalOptscoreMin['restricted'],
+            'totalOptscoreMaxPublic' => $totalOptscoreMax['public'],
+            'totalOptscoreMinPublic' => $totalOptscoreMin['public'],
         ];
         $this->em->getConnection()->executeQuery('REPLACE INTO rankcache (cid, teamid,
             points_restricted, totaltime_restricted, totalruntime_restricted,
-            points_public, totaltime_public, totalruntime_public, sort_key_restricted, sort_key_public)
+            points_public, totaltime_public, totalruntime_public, sort_key_restricted, sort_key_public,
+            totaloptscore_max_restricted, totaloptscore_min_restricted, totaloptscore_max_public, totaloptscore_min_public)
             VALUES (:cid, :teamid, :pointsRestricted, :totalTimeRestricted, :totalRuntimeRestricted,
-            :pointsPublic, :totalTimePublic, :totalRuntimePublic, :sortKeyRestricted, :sortKeyPublic)', $params);
+            :pointsPublic, :totalTimePublic, :totalRuntimePublic, :sortKeyRestricted, :sortKeyPublic,
+            :totalOptscoreMaxRestricted, :totalOptscoreMinRestricted, :totalOptscoreMaxPublic, :totalOptscoreMinPublic)', $params);
 
         if ($this->em->getConnection()->fetchOne('SELECT RELEASE_LOCK(:lock)',
                                                     ['lock' => $lockString]) != 1) {
@@ -591,6 +643,25 @@ class ScoreboardService
     {
         $scoreKeyArray = [
             self::convertToScoreKeyElement($numSolved),
+            self::convertToScoreKeyElement($totalTime, Order::Ascending),
+            self::convertToScoreKeyElement($timeOfLastSolved, Order::Ascending),
+        ];
+        return implode(',', $scoreKeyArray);
+    }
+
+    public static function getOptscoreICPCScoreKey(
+        int    $numSolved,
+        int    $totalTime,
+        int    $timeOfLastSolved,
+        float  $totalOptscore,
+        string $optScoreOrder
+    ): string {
+        // Convert float to bcmath-compatible string with fixed precision
+        $optscoreStr = number_format(abs($totalOptscore), self::SCALE, '.', '');
+        $optOrder = $optScoreOrder === 'asc' ? Order::Ascending : Order::Descending;
+        $scoreKeyArray = [
+            self::convertToScoreKeyElement($numSolved),
+            self::convertToScoreKeyElement($optscoreStr, $optOrder),
             self::convertToScoreKeyElement($totalTime, Order::Ascending),
             self::convertToScoreKeyElement($timeOfLastSolved, Order::Ascending),
         ];

@@ -58,6 +58,11 @@ class SingleTeamScoreboard extends Scoreboard
                 $this->penaltyTime, $this->scoreIsInSeconds
             );
 
+            $optscoreOrder = $this->contest->getOptScoreOrder() ?? 'asc';
+            $optscore = ($optscoreOrder === 'asc')
+                ? $scoreRow->getOptscoreMin($this->restricted)
+                : $scoreRow->getOptscoreMax($this->restricted);
+
             $this->matrix[$scoreRow->getTeam()->getTeamid()][$scoreRow->getProblem()->getProbid()] = new ScoreboardMatrixItem(
                 isCorrect: $scoreRow->getIsCorrect($this->restricted),
                 isFirst: $scoreRow->getIsCorrect($this->showRestrictedFts) && $scoreRow->getIsFirstToSolve(),
@@ -67,6 +72,7 @@ class SingleTeamScoreboard extends Scoreboard
                 penaltyTime: $penalty,
                 runtime: $scoreRow->getRuntime($this->restricted),
                 numSubmissionsInFreeze: $scoreRow->getPending(false),
+                optscore: $optscore,
             );
         }
 

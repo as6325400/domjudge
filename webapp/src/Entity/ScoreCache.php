@@ -88,6 +88,18 @@ class ScoreCache
     #[ORM\Column(options: ['comment' => 'Runtime in milliseconds (public)', 'default' => 0])]
     private int $runtime_public = 0;
 
+    #[ORM\Column(nullable: true, options: ['comment' => 'Max optscore (restricted audience)'])]
+    private ?float $optscore_max_restricted = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Min optscore (restricted audience)'])]
+    private ?float $optscore_min_restricted = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Max optscore (public)'])]
+    private ?float $optscore_max_public = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Min optscore (public)'])]
+    private ?float $optscore_min_public = null;
+
     #[ORM\Column(options: [
         'comment' => 'Is this the first solution to this problem?',
         'default' => 0,
@@ -286,5 +298,59 @@ class ScoreCache
     public function getIsCorrect(bool $restricted): bool
     {
         return $restricted ? $this->getIsCorrectRestricted() : $this->getIsCorrectPublic();
+    }
+
+    public function setOptscoreMaxRestricted(?float $optscoreMaxRestricted): ScoreCache
+    {
+        $this->optscore_max_restricted = $optscoreMaxRestricted;
+        return $this;
+    }
+
+    public function getOptscoreMaxRestricted(): ?float
+    {
+        return $this->optscore_max_restricted;
+    }
+
+    public function setOptscoreMinRestricted(?float $optscoreMinRestricted): ScoreCache
+    {
+        $this->optscore_min_restricted = $optscoreMinRestricted;
+        return $this;
+    }
+
+    public function getOptscoreMinRestricted(): ?float
+    {
+        return $this->optscore_min_restricted;
+    }
+
+    public function setOptscoreMaxPublic(?float $optscoreMaxPublic): ScoreCache
+    {
+        $this->optscore_max_public = $optscoreMaxPublic;
+        return $this;
+    }
+
+    public function getOptscoreMaxPublic(): ?float
+    {
+        return $this->optscore_max_public;
+    }
+
+    public function setOptscoreMinPublic(?float $optscoreMinPublic): ScoreCache
+    {
+        $this->optscore_min_public = $optscoreMinPublic;
+        return $this;
+    }
+
+    public function getOptscoreMinPublic(): ?float
+    {
+        return $this->optscore_min_public;
+    }
+
+    public function getOptscoreMax(bool $restricted): ?float
+    {
+        return $restricted ? $this->optscore_max_restricted : $this->optscore_max_public;
+    }
+
+    public function getOptscoreMin(bool $restricted): ?float
+    {
+        return $restricted ? $this->optscore_min_restricted : $this->optscore_min_public;
     }
 }

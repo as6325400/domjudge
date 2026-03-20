@@ -198,6 +198,17 @@ class Judging extends BaseApiEntity
         return $sum;
     }
 
+    public function getSumOptscore(): ?float
+    {
+        $sum = null;
+        foreach ($this->runs as $run) {
+            if ($run->getOptscore() !== null) {
+                $sum = ($sum ?? 0) + $run->getOptscore();
+            }
+        }
+        return $sum;
+    }
+
     public function getJudgingid(): int
     {
         return $this->judgingid;

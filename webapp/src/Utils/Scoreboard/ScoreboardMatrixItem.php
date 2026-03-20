@@ -14,5 +14,6 @@ class ScoreboardMatrixItem
         public int $runtime,
         public ?int $numSubmissionsInFreeze = null,
         public string $points = "",
+        public ?float $optscore = null,
     ) {}
 }

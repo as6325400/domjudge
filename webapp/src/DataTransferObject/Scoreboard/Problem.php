@@ -25,5 +25,8 @@ class Problem
         #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
         #[Serializer\Exclude(if: 'object.fastestSubmission === null')]
         public ?bool $fastestSubmission = null,
+        #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
+        #[Serializer\Exclude(if: 'object.optscore === null')]
+        public ?float $optscore = null,
     ) {}
 }

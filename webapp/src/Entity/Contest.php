@@ -291,6 +291,20 @@ class Contest extends BaseApiEntity implements
     private bool $runtime_as_score_tiebreaker = false;
 
     #[ORM\Column(
+        options: ['comment' => 'Is optscore used as tiebreaker?', 'default' => 0]
+    )]
+    #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
+    private bool $opt_score_as_score_tiebreaker = false;
+
+    #[ORM\Column(
+        length: 4,
+        nullable: true,
+        options: ['comment' => 'Order for optscore sorting (asc/desc)', 'default' => 'asc']
+    )]
+    #[Serializer\Groups([ARC::GROUP_NONSTRICT])]
+    private ?string $opt_score_order = 'asc';
+
+    #[ORM\Column(
         options: ['comment' => 'Is this contest visible for the public?', 'default' => 1]
     )]
     #[Serializer\Exclude]
@@ -785,6 +799,28 @@ class Contest extends BaseApiEntity implements
     public function getRuntimeAsScoreTiebreaker(): bool
     {
         return $this->runtime_as_score_tiebreaker;
+    }
+
+    public function setOptScoreAsScoreTiebreaker(bool $optScoreAsScoreTiebreaker): Contest
+    {
+        $this->opt_score_as_score_tiebreaker = $optScoreAsScoreTiebreaker;
+        return $this;
+    }
+
+    public function getOptScoreAsScoreTiebreaker(): bool
+    {
+        return $this->opt_score_as_score_tiebreaker;
+    }
+
+    public function setOptScoreOrder(?string $optScoreOrder): Contest
+    {
+        $this->opt_score_order = $optScoreOrder;
+        return $this;
+    }
+
+    public function getOptScoreOrder(): ?string
+    {
+        return $this->opt_score_order;
     }
 
     public function setMedalsEnabled(bool $medalsEnabled): Contest

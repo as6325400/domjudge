@@ -55,6 +55,18 @@ class RankCache
     #[ORM\Column(options: ['comment' => 'Total runtime in milliseconds (public)', 'default' => 0])]
     private int $totalruntime_public = 0;
 
+    #[ORM\Column(nullable: true, options: ['comment' => 'Total max optscore (restricted audience)', 'default' => null])]
+    private ?float $totaloptscore_max_restricted = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Total min optscore (restricted audience)', 'default' => null])]
+    private ?float $totaloptscore_min_restricted = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Total max optscore (public)', 'default' => null])]
+    private ?float $totaloptscore_max_public = null;
+
+    #[ORM\Column(nullable: true, options: ['comment' => 'Total min optscore (public)', 'default' => null])]
+    private ?float $totaloptscore_min_public = null;
+
     #[ORM\Id]
     #[ORM\ManyToOne]
     #[ORM\JoinColumn(name: 'cid', referencedColumnName: 'cid', onDelete: 'CASCADE')]
@@ -187,5 +199,57 @@ class RankCache
     public function getSortKeyRestricted(): string
     {
         return $this->sortKeyRestricted;
+    }
+
+    public function setTotaloptscoreMaxRestricted(?float $value): RankCache
+    {
+        $this->totaloptscore_max_restricted = $value;
+        return $this;
+    }
+
+    public function getTotaloptscoreMaxRestricted(): ?float
+    {
+        return $this->totaloptscore_max_restricted;
+    }
+
+    public function setTotaloptscoreMinRestricted(?float $value): RankCache
+    {
+        $this->totaloptscore_min_restricted = $value;
+        return $this;
+    }
+
+    public function getTotaloptscoreMinRestricted(): ?float
+    {
+        return $this->totaloptscore_min_restricted;
+    }
+
+    public function setTotaloptscoreMaxPublic(?float $value): RankCache
+    {
+        $this->totaloptscore_max_public = $value;
+        return $this;
+    }
+
+    public function getTotaloptscoreMaxPublic(): ?float
+    {
+        return $this->totaloptscore_max_public;
+    }
+
+    public function setTotaloptscoreMinPublic(?float $value): RankCache
+    {
+        $this->totaloptscore_min_public = $value;
+        return $this;
+    }
+
+    public function getTotaloptscoreMinPublic(): ?float
+    {
+        return $this->totaloptscore_min_public;
+    }
+
+    public function getTotaloptscore(bool $restricted, string $order = 'asc'): ?float
+    {
+        if ($order === 'asc') {
+            return $restricted ? $this->totaloptscore_min_restricted : $this->totaloptscore_min_public;
+        }
+        return $restricted ? $this->totaloptscore_max_restricted : $this->totaloptscore_max_public;
     }
 }

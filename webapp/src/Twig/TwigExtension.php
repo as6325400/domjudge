@@ -124,6 +124,7 @@ class TwigExtension extends AbstractExtension implements GlobalsInterface
             new TwigFilter('medalType', $this->awards->medalType(...)),
             new TwigFilter('numTableActions', $this->numTableActions(...)),
             new TwigFilter('extensionToMime', $this->extensionToMime(...)),
+            new TwigFilter('formatOptScore', $this->formatOptScore(...)),
         ];
     }
 
@@ -1405,5 +1406,16 @@ EOF;
     public function extensionToMime(string $extension): string
     {
         return DOMJudgeService::EXTENSION_TO_MIMETYPE[$extension];
+    }
+
+    protected function formatOptScore(?float $optScore, int $maxDecimals = 3): string
+    {
+        if ($optScore === null) {
+            return '-';
+        }
+        if ($optScore == floor($optScore)) {
+            return number_format($optScore, 0, '.', '');
+        }
+        return number_format($optScore, $maxDecimals, '.', '');
     }
 }

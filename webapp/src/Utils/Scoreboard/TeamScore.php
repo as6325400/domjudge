@@ -12,8 +12,9 @@ class TeamScore
     public int $rank = 0;
     public int $totalTime;
     public int $totalRuntime = 0;
+    public ?float $totalOptscore = null;
 
-    public function __construct(public Team $team, public ?RankCache $rankCache, bool $restricted)
+    public function __construct(public Team $team, public ?RankCache $rankCache, bool $restricted, string $optScoreOrder = 'asc')
     {
         $this->totalTime = $team->getPenalty();
         if ($this->rankCache) {
@@ -26,6 +27,7 @@ class TeamScore
                 $this->totalTime += $rankCache->getTotaltimePublic();
                 $this->totalRuntime = $rankCache->getTotalruntimePublic();
             }
+            $this->totalOptscore = $rankCache->getTotaloptscore($restricted, $optScoreOrder);
         }
     }
 

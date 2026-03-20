@@ -983,7 +983,11 @@ class JudgehostController extends AbstractFOSRestController
                 ->setMetadata(base64_decode($metadata));
 
             if ($compareMeta) {
-                $judgingRunOutput->setValidatorMetadata(base64_decode($compareMeta));
+                $decodedCompareMeta = base64_decode($compareMeta);
+                $judgingRunOutput->setValidatorMetadata($decodedCompareMeta);
+                if (preg_match('/^opt-score:\s*(.+)$/m', $decodedCompareMeta, $matches)) {
+                    $judgingRun->setOptscore((float)trim($matches[1]));
+                }
             }
 
             if ($teamMessage) {

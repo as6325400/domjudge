@@ -122,6 +122,7 @@ class SubmissionController extends BaseController
         $showSampleOutput     = $this->config->get('show_sample_output');
         $allowDownload        = (bool)$this->config->get('allow_team_submission_download');
         $showTooLateResult    = $this->config->get('show_too_late_result');
+        $showTestResults      = (bool)$this->config->get('show_test_results');
         $user                 = $this->dj->getUser();
         $team                 = $user->getTeam();
         $contest              = $this->dj->getCurrentContest($team->getTeamid());
@@ -190,6 +191,21 @@ class SubmissionController extends BaseController
                 ->getResult();
         }
 
+        $testcaseRuns = [];
+        if ($showTestResults && $judging && $judging->getResult() !== 'compiler-error') {
+            $queryBuilder = $this->em->createQueryBuilder()
+                ->from(Testcase::class, 't')
+                ->join('t.content', 'tc')
+                ->leftJoin('t.judging_runs', 'jr', Join::WITH, 'jr.judging = :judging')
+                ->leftJoin('jr.output', 'jro')
+                ->select('t', 'jr', 'tc')
+                ->andWhere('t.problem = :problem')
+                ->setParameter('judging', $judging)
+                ->setParameter('problem', $judging->getSubmission()->getProblem())
+                ->orderBy('t.ranknumber');
+            $testcaseRuns = $queryBuilder->getQuery()->getResult();
+        }
+
         $actuallyShowCompile = $showCompile == self::ALWAYS_SHOW_COMPILE_OUTPUT
             || ($showCompile == self::ONLY_SHOW_COMPILE_OUTPUT_ON_ERROR && $judging->getResult() === 'compiler-error');
 
@@ -201,6 +217,8 @@ class SubmissionController extends BaseController
             'showSampleOutput' => $showSampleOutput,
             'runs' => $runs,
             'showTooLateResult' => $showTooLateResult,
+            'showTestResults' => $showTestResults,
+            'testcaseRuns' => $testcaseRuns,
             'thumbnailSize' => $this->config->get('thumbnail_size'),
         ];
         if ($actuallyShowCompile) {

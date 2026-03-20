@@ -133,9 +133,10 @@ class Scoreboard
 
         // Initialize scores
         $this->scores = [];
+        $optScoreOrder = $this->contest->getOptScoreOrder() ?? 'asc';
         foreach ($this->teamsInDescendingOrder as $team) {
             $rankCacheForTeam = $teamToRankCache[$team->getTeamid()] ?? null;
-            $this->scores[$team->getTeamid()] = new TeamScore($team, $rankCacheForTeam, $this->restricted);
+            $this->scores[$team->getTeamid()] = new TeamScore($team, $rankCacheForTeam, $this->restricted, $optScoreOrder);
         }
     }
 
@@ -170,6 +171,11 @@ class Scoreboard
                 $contestProblem->getPoints() : 0
             );
 
+            $optscoreOrder = $this->contest->getOptScoreOrder() ?? 'asc';
+            $optscore = ($optscoreOrder === 'asc')
+                ? $scoreCell->getOptscoreMin($this->restricted)
+                : $scoreCell->getOptscoreMax($this->restricted);
+
             $this->matrix[$teamId][$probId] = new ScoreboardMatrixItem(
                 isCorrect: $isCorrect,
                 isFirst: $isCorrect && $scoreCell->getIsFirstToSolve(),
@@ -180,6 +186,7 @@ class Scoreboard
                 runtime: $scoreCell->getRuntime($this->restricted),
                 numSubmissionsInFreeze: $scoreCell->getPending(false),
                 points: $points,
+                optscore: $optscore,
             );
         }
 
@@ -390,5 +397,15 @@ class Scoreboard
     public function getRuntimeAsScoreTiebreaker(): bool
     {
         return $this->contest->getRuntimeAsScoreTiebreaker();
+    }
+
+    public function getOptScoreAsScoreTiebreaker(): bool
+    {
+        return $this->contest->getOptScoreAsScoreTiebreaker();
+    }
+
+    public function getOptScoreOrder(): ?string
+    {
+        return $this->contest->getOptScoreOrder();
     }
 }

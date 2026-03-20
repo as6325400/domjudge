@@ -9,6 +9,9 @@
                                 | max:
                                 {{ selectedJudging.maxRuntime | number_format(3, '.', '') }}s
                                 | sum: {{ selectedJudging.sumRuntime | number_format(3, '.', '') }}s
+                                {% if selectedJudging.getSumOptscore() is not null %}
+                                    | opt-score: {{ selectedJudging.getSumOptscore() | formatOptScore }}
+                                {% endif %}
                             {% endif %}
                     </span>
                 </span>

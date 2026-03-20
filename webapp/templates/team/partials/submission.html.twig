@@ -47,6 +47,19 @@
                         Max. Runtime: <b>{{ "%0.3f s" | format(judging.getMaxRuntime()) }}</b>
                     </div>
                 {% endif %}
+                {% if judging.result == 'correct' and judging.submission.contest.getOptScoreAsScoreTiebreaker() %}
+                    <div class="p-2">
+                        Opt. Score: <b>{{ judging.getSumOptscore() | formatOptScore }}</b>
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        {% if showTestResults and judging.result != 'compiler-error' %}
+            <div class="d-flex flex-row">
+                <div class="p-2">
+                    Testcase Runs: {{ testcaseRuns | displayTestcaseResults(judging.endtime is not empty) }}
+                </div>
             </div>
         {% endif %}
 

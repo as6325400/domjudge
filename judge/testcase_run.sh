@@ -271,6 +271,20 @@ if [ -s compare.tmp ]; then
 	printf "\\n---------- output validator stdout/stderr messages ----------\\n" >> feedback/judgemessage.txt
 	cat compare.tmp >> feedback/judgemessage.txt
 fi
+
+# Extract OPT_SCORE from compare script output and write to compare.meta
+if grep -q '^OPT_SCORE=' compare.tmp 2>/dev/null; then
+	score="$(grep -m1 '^OPT_SCORE=' compare.tmp | cut -d= -f2-)"
+	case "$score" in
+		''|*[!0-9.-]*|*.*.*|*.-*)
+			logmsg $LOG_WARNING "Invalid OPT_SCORE value: $score"
+			;;
+		*)
+			echo "opt-score: $score" >> compare.meta
+			;;
+	esac
+fi
+
 if [ $exitcode -ne 42 ] && [ $exitcode -ne 43 ]; then
 	logmsg $LOG_ERR "Comparing failed with exitcode $exitcode, compare script output:\\n$(cat feedback/judgemessage.txt)"
 	cleanexit ${E_COMPARE_ERROR:-1}

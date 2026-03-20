@@ -175,7 +175,13 @@ class ScoreboardController extends AbstractApiController
                 continue;
             }
 
-            if ($contest->getRuntimeAsScoreTiebreaker()) {
+            if ($contest->getOptScoreAsScoreTiebreaker()) {
+                $score = new Score(
+                    numSolved: $teamScore->numPoints,
+                    totalTime: $teamScore->totalTime,
+                    totalOptscore: $teamScore->totalOptscore,
+                );
+            } elseif ($contest->getRuntimeAsScoreTiebreaker()) {
                 $score = new Score(
                     numSolved: $teamScore->numPoints,
                     totalRuntime: $teamScore->totalRuntime,
@@ -198,7 +204,13 @@ class ScoreboardController extends AbstractApiController
                     solved: $matrixItem->isCorrect,
                 );
 
-                if ($contest->getRuntimeAsScoreTiebreaker()) {
+                if ($contest->getOptScoreAsScoreTiebreaker()) {
+                    $problem->firstToSolve = $matrixItem->isCorrect && $scoreboard->solvedFirst($teamScore->team, $contestProblem);
+                    if ($matrixItem->isCorrect) {
+                        $problem->time = Utils::scoretime($matrixItem->time, $scoreIsInSeconds);
+                        $problem->optscore = $matrixItem->optscore;
+                    }
+                } elseif ($contest->getRuntimeAsScoreTiebreaker()) {
                     $problem->fastestSubmission = $matrixItem->isCorrect && $scoreboard->isFastestSubmission($teamScore->team, $contestProblem);
                     if ($matrixItem->isCorrect) {
                         $problem->runtime = $matrixItem->runtime;
