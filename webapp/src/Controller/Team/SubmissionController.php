@@ -195,10 +195,8 @@ class SubmissionController extends BaseController
         if ($showTestResults && $judging && $judging->getResult() !== 'compiler-error') {
             $queryBuilder = $this->em->createQueryBuilder()
                 ->from(Testcase::class, 't')
-                ->join('t.content', 'tc')
                 ->leftJoin('t.judging_runs', 'jr', Join::WITH, 'jr.judging = :judging')
-                ->leftJoin('jr.output', 'jro')
-                ->select('t', 'jr', 'tc')
+                ->select('t', 'jr')
                 ->andWhere('t.problem = :problem')
                 ->setParameter('judging', $judging)
                 ->setParameter('problem', $judging->getSubmission()->getProblem())
